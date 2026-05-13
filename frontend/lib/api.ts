@@ -35,7 +35,7 @@ export interface AnalysisResult {
   owner: string;
   repo: string;
   pr_number: number;
-  status: "completed" | "failed";
+  status: "pending" | "processing" | "completed" | "failed";
   created_at: string;
   completed_at: string;
   
