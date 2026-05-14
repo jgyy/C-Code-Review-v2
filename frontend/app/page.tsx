@@ -19,7 +19,7 @@ export default function DashboardPage() {
   );
 
   // Fetch recent jobs
-  const { data: jobsData, isLoading: jobsLoading } = useSWR(
+  const { data: jobsData, isLoading: jobsLoading } = useSWR<{ jobs: JobStatus[]; total: number }>(
     "/api/jobs?limit=5",
     fetcher,
     {

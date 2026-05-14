@@ -15,7 +15,7 @@ export default function JobsPage() {
   const JOBS_PER_PAGE = 20;
 
   // Fetch jobs from API
-  const { data: jobsData, isLoading } = useSWR(
+  const { data: jobsData, isLoading } = useSWR<{ jobs: JobStatus[]; total: number }>(
     `/api/jobs?limit=${JOBS_PER_PAGE}&offset=${page * JOBS_PER_PAGE}`,
     fetcher,
     {
