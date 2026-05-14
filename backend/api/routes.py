@@ -20,6 +20,7 @@ from api.schemas import (
     AnalysisResultResponse,
     FunctionAnalysisSummary,
     CacheStatsResponse,
+    JobListResponse,
     JobStatus,
 )
 from cache.redis import (
@@ -27,6 +28,7 @@ from cache.redis import (
     get_job_status,
     get_job_result,
     get_cache_stats,
+    list_jobs,
 )
 from github_utils.webhook import process_pr_job
 
@@ -186,3 +188,50 @@ async def cache_stats():
     """
     stats = await get_cache_stats()
     return CacheStatsResponse(**stats)
+
+
+@router.get("/jobs", response_model=JobListResponse)
+async def list_jobs_endpoint(limit: int = 20, offset: int = 0):
+    """
+    List recent analysis jobs with pagination.
+
+    Query parameters:
+    - limit: Number of jobs to return (default 20, max 100)
+    - offset: Number of jobs to skip (default 0)
+    """
+    # Limit the maximum results to prevent abuse
+    limit = min(limit, 100)
+    limit = max(limit, 1)
+    offset = max(offset, 0)
+
+    jobs_data, total = await list_jobs(limit=limit, offset=offset)
+
+    # Convert to JobStatusResponse objects
+    jobs = []
+    for job_data in jobs_data:
+        job_id = job_data.get("job_id", "unknown")
+        status_str = job_data.get("status", "pending")
+        try:
+            status = JobStatus(status_str)
+        except ValueError:
+            status = JobStatus.PENDING
+
+        jobs.append(JobStatusResponse(
+            job_id=job_id,
+            status=status,
+            files_analyzed=job_data.get("files_analyzed"),
+            functions_analyzed=job_data.get("functions_analyzed"),
+            cache_hits=job_data.get("cache_hits"),
+            cache_misses=job_data.get("cache_misses"),
+            skipped_reason=job_data.get("skipped_reason"),
+            error=job_data.get("error"),
+            created_at=job_data.get("created_at"),
+            updated_at=job_data.get("updated_at"),
+        ))
+
+    return JobListResponse(
+        jobs=jobs,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

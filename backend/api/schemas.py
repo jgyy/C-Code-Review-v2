@@ -112,6 +112,14 @@ class CacheStatsResponse(BaseModel):
     error: Optional[str] = None
 
 
+class JobListResponse(BaseModel):
+    """Response for listing jobs."""
+    jobs: list[JobStatusResponse] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str

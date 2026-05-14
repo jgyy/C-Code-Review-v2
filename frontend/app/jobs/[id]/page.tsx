@@ -204,14 +204,11 @@ export default function JobDetailPage({
 }) {
   const { id } = use(params);
 
-  // In production, fetch from /api/result/{id}
-  // const { data: result, isLoading, error } = useSWR<AnalysisResult>(
-  //   `/api/result/${id}`,
-  //   fetcher,
-  //   { refreshInterval: result?.status === "processing" ? 3000 : 0 }
-  // );
-  const result = mockResult;
-  const isLoading = false;
+  const { data: result, isLoading, error } = useSWR<AnalysisResult>(
+    `/api/result/${id}`,
+    fetcher,
+    { refreshInterval: result?.status === "processing" ? 3000 : 0 }
+  );
 
   if (isLoading) {
     return (
@@ -226,7 +223,7 @@ export default function JobDetailPage({
       <div className="flex h-64 flex-col items-center justify-center text-center">
         <p className="text-lg font-medium text-foreground">Job not found</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          The requested job could not be found.
+          {error ? `Error: ${(error as any)?.message}` : "The requested job could not be found."}
         </p>
         <Link
           href="/jobs"

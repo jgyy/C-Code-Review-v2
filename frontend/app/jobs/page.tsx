@@ -7,78 +7,24 @@ import { fetcher } from "@/lib/api";
 import type { JobStatus, AnalysisResult } from "@/lib/api";
 import { Loader2, Filter } from "lucide-react";
 
-// Mock data for demo
-const mockJobs: (JobStatus & Partial<AnalysisResult>)[] = [
-  {
-    job_id: "job-001",
-    status: "completed",
-    created_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    owner: "torvalds",
-    repo: "linux",
-    pr_number: 1234,
-    overall_risk: "low",
-  },
-  {
-    job_id: "job-002",
-    status: "processing",
-    created_at: new Date(Date.now() - 1000 * 60 * 2).toISOString(),
-    owner: "redis",
-    repo: "redis",
-    pr_number: 567,
-  },
-  {
-    job_id: "job-003",
-    status: "completed",
-    created_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    owner: "curl",
-    repo: "curl",
-    pr_number: 890,
-    overall_risk: "high",
-  },
-  {
-    job_id: "job-004",
-    status: "failed",
-    created_at: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-    owner: "git",
-    repo: "git",
-    pr_number: 111,
-  },
-  {
-    job_id: "job-005",
-    status: "completed",
-    created_at: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-    owner: "nginx",
-    repo: "nginx",
-    pr_number: 222,
-    overall_risk: "medium",
-  },
-  {
-    job_id: "job-006",
-    status: "pending",
-    created_at: new Date(Date.now() - 1000 * 30).toISOString(),
-    owner: "openssl",
-    repo: "openssl",
-    pr_number: 333,
-  },
-  {
-    job_id: "job-007",
-    status: "completed",
-    created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-    owner: "ffmpeg",
-    repo: "FFmpeg",
-    pr_number: 444,
-    overall_risk: "critical",
-  },
-];
-
 type StatusFilter = "all" | "pending" | "processing" | "completed" | "failed";
 
 export default function JobsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  
-  // In production, fetch from /api/jobs
-  const jobs = mockJobs;
-  const isLoading = false;
+  const [page, setPage] = useState(0);
+  const JOBS_PER_PAGE = 20;
+
+  // Fetch jobs from API
+  const { data: jobsData, isLoading } = useSWR(
+    `/api/jobs?limit=${JOBS_PER_PAGE}&offset=${page * JOBS_PER_PAGE}`,
+    fetcher,
+    {
+      refreshInterval: 5000, // Refresh every 5s
+    }
+  );
+
+  const jobs: (JobStatus & Partial<AnalysisResult>)[] = jobsData?.jobs ?? [];
+  const totalJobs = jobsData?.total ?? 0;
 
   const filteredJobs = statusFilter === "all"
     ? jobs
@@ -91,6 +37,8 @@ export default function JobsPage() {
     completed: jobs.filter((j) => j.status === "completed").length,
     failed: jobs.filter((j) => j.status === "failed").length,
   };
+
+  const totalPages = Math.ceil(totalJobs / JOBS_PER_PAGE);
 
   if (isLoading) {
     return (
@@ -108,12 +56,15 @@ export default function JobsPage() {
           <Filter className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Filter:</span>
         </div>
-        
+
         <div className="flex gap-2">
           {(["all", "pending", "processing", "completed", "failed"] as const).map((status) => (
             <button
               key={status}
-              onClick={() => setStatusFilter(status)}
+              onClick={() => {
+                setStatusFilter(status);
+                setPage(0);
+              }}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 statusFilter === status
                   ? "bg-secondary text-foreground"
@@ -131,6 +82,34 @@ export default function JobsPage() {
 
       {/* Job List */}
       <JobList jobs={filteredJobs} />
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between border-t pt-4">
+        <div className="text-sm text-muted-foreground">
+          Showing {page * JOBS_PER_PAGE + 1} to {Math.min((page + 1) * JOBS_PER_PAGE, totalJobs)} of {totalJobs}
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => setPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+            className="rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <span className="flex items-center px-3 py-1.5 text-sm">
+            Page {page + 1} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
+            disabled={page >= totalPages - 1}
+            className="rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
+

@@ -198,11 +198,52 @@ async def get_job_result(job_id: str) -> Optional[dict]:
 # Cache Stats
 # ---------------------------------------------------------------------------
 
+async def list_jobs(limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
+    """
+    List recent jobs with pagination.
+    Returns (jobs, total_count) where jobs are sorted by most recent first.
+    """
+    if not redis_client:
+        return ([], 0)
+
+    try:
+        # Get all job keys
+        keys = await redis_client.keys("job:*")
+        if not keys:
+            return ([], 0)
+
+        # Fetch all job data
+        jobs = []
+        for key in keys:
+            try:
+                data = await redis_client.get(key)
+                if data:
+                    job_data = json.loads(data) if isinstance(data, str) else data
+                    # Extract job_id from the key (format: "job:{job_id}")
+                    job_id = key.replace("job:", "")
+                    job_data["job_id"] = job_id
+                    jobs.append(job_data)
+            except Exception:
+                continue
+
+        # Sort by most recent first (assuming jobs are created with timestamp in data)
+        # If no timestamp, keep original order
+        total = len(jobs)
+
+        # Apply pagination
+        paginated = jobs[offset:offset + limit]
+
+        return (paginated, total)
+    except Exception as e:
+        print(f"Redis list_jobs error: {e}")
+        return ([], 0)
+
+
 async def get_cache_stats() -> dict:
     """Get cache statistics for monitoring."""
     if not redis_client:
         return {"status": "disabled", "reason": "Redis not configured"}
-    
+
     try:
         # Count keys by pattern (approximate)
         info = await redis_client.dbsize()
