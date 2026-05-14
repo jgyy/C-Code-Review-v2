@@ -28,7 +28,7 @@ from cache.redis import (
     get_job_result,
     get_cache_stats,
 )
-from github.webhook import process_pr_job
+from github_utils.webhook import process_pr_job
 
 
 router = APIRouter(tags=["api"])

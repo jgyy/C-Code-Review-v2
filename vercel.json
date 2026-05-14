@@ -1,12 +1,12 @@
 {
-  "experimentalServices": {
-    "frontend": {
-      "entrypoint": "frontend",
-      "routePrefix": "/"
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/https://spull2-production.up.railway.app/api/:path*"
     },
-    "backend": {
-      "entrypoint": "backend/main.py",
-      "routePrefix": "/api"
+    {
+      "source": "/webhook",
+      "destination": "https://spull2-production.up.railway.app"
     }
-  }
+  ]
 }

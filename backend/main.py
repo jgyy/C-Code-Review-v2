@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router
-from github.webhook import router as webhook_router
+from github_utils.webhook import router as webhook_router
 from cache.redis import redis_client, init_redis
 
 

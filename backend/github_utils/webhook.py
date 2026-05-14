@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from cache.redis import enqueue_job, update_job_status
 from workers.pipeline import AnalysisPipeline, PipelineConfig
-from github.client import GitHubClient
+from github_utils.client import GitHubClient
 from llm.client import GeminiClient
 
 

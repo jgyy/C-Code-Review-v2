@@ -30,7 +30,7 @@ from core.heuristics import (
 from core.triage import triage, TriageResult, Route
 from workers.pool import parse_files_parallel
 from cache.redis import get_cached_ast, set_cached_ast
-from github.client import GitHubClient
+from github_utils.client import GitHubClient
 from llm.client import GeminiClient
 from llm.schemas import PRAnalysis
 

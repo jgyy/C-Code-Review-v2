@@ -16,7 +16,7 @@ import asyncio
 from typing import Optional
 from dataclasses import asdict
 
-import google.generativeai as genai
+import google.genai as genai
 
 from llm.schemas import (
     PRAnalysis,
