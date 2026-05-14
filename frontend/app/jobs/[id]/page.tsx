@@ -207,7 +207,7 @@ export default function JobDetailPage({
   const { data: result, isLoading, error } = useSWR<AnalysisResult>(
     `/api/result/${id}`,
     fetcher,
-    { refreshInterval: result?.status === "processing" ? 3000 : 0 }
+    { refreshInterval: (data?: AnalysisResult) => data?.status === "processing" ? 3000 : 0 }
   );
 
   if (isLoading) {
