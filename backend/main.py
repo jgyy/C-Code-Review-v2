@@ -51,7 +51,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(api_router, prefix="")
+app.include_router(api_router, prefix="/api")
 app.include_router(webhook_router, prefix="")
 
 
