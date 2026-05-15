@@ -28,6 +28,7 @@
     "date-fns": "4.1.0",
     "lucide-react": "^0.564.0",
     "next": "16.2.6",
+    "next-auth": "^4.24.14",
     "react": "^19",
     "react-dom": "^19",
     "recharts": "2.15.0",
