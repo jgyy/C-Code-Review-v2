@@ -20,7 +20,9 @@ from functools import cached_property
 from github import Github, GithubIntegration, Auth
 from github.PullRequest import PullRequest
 from github.Repository import Repository
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class GitHubClient:
     """

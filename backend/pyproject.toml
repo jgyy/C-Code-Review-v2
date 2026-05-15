@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Intelligent C code review system with AST analysis and LLM insights"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.115.0",
+    "fastapi[standard]>=0.128.1",
     "tree-sitter>=0.24.0",
     "tree-sitter-c>=0.24.0",
     "rapidfuzz>=3.10.0",

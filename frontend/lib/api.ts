@@ -80,7 +80,7 @@ export interface HealthStatus {
   llm_configured: boolean;
 }
 
-const API_BASE = "/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
 
 class APIError extends Error {
   constructor(
@@ -122,7 +122,7 @@ async function request<T>(
 export const api = {
   // Trigger analysis
   analyze: (data: AnalyzeRequest) =>
-    request<{ job_id: string }>("/analyze", {
+    request<{ job_id: string }>("/api/analyze", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -157,5 +157,5 @@ export const api = {
 };
 
 // SWR fetcher
-export const fetcher = <T>(url: string): Promise<T> =>
-  request<T>(url.replace(API_BASE, ""));
+export const fetcher = <T>(endpoint: string): Promise<T> =>
+  request<T>(endpoint);

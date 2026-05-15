@@ -83,7 +83,11 @@ class AnalysisResultResponse(BaseModel):
     """Full analysis result."""
     job_id: str
     status: JobStatus
-    
+
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
+
     # PR info
     repo_full_name: Optional[str] = None
     pr_number: Optional[int] = None

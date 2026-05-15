@@ -24,7 +24,9 @@ from cache.redis import enqueue_job, update_job_status
 from workers.pipeline import AnalysisPipeline, PipelineConfig
 from github_utils.client import GitHubClient
 from llm.client import GeminiClient
+from dotenv import load_dotenv
 
+load_dotenv()
 
 router = APIRouter(tags=["webhook"])
 

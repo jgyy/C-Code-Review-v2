@@ -31,7 +31,9 @@ from cache.redis import (
     list_jobs,
 )
 from github_utils.webhook import process_pr_job
+import logging
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["api"])
 
@@ -60,7 +62,7 @@ async def analyze_pr(
     }
     
     success = await enqueue_job(job_id, job_data)
-    
+    logger.info(f"enqueue: {success}")    
     if not success:
         raise HTTPException(
             status_code=503,
@@ -122,7 +124,7 @@ async def get_analysis_result(job_id: str):
     """
     # First check job status
     job_data = await get_job_status(job_id)
-    
+    logger.info(f"job: {job_data}")    
     if not job_data:
         raise HTTPException(
             status_code=404,
@@ -139,12 +141,15 @@ async def get_analysis_result(job_id: str):
     if status != JobStatus.COMPLETED:
         return AnalysisResultResponse(
             job_id=job_id,
+            owner=job_data.get("owner"),
+            repo=job_data.get("repo"),
+            pr_number=job_data.get("pr_number"),
             status=status,
         )
     
     # Get the result
     result = await get_job_result(job_id)
-    
+    logger.info(f"res {result} for id: {job_id}")
     if not result:
         return AnalysisResultResponse(
             job_id=job_id,
@@ -164,9 +169,12 @@ async def get_analysis_result(job_id: str):
             risk_signals=fa.get("risk_signals", []),
             suggestion=fa.get("suggestion"),
         ))
-    
+    logger.info(f"j: {job_data}, o: {job_data.get("owner")}")
     return AnalysisResultResponse(
         job_id=job_id,
+        owner=job_data.get("owner"),
+        repo=job_data.get("repo"),
+        pr_number=job_data.get("pr_number"),
         status=status,
         headline=analysis.get("headline"),
         risk_level=analysis.get("risk_level"),

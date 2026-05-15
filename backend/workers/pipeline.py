@@ -33,12 +33,15 @@ from cache.redis import get_cached_ast, set_cached_ast
 from github_utils.client import GitHubClient
 from llm.client import GeminiClient
 from llm.schemas import PRAnalysis
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class PipelineConfig:
     """Configuration for the analysis pipeline."""
-    max_files: int = 50  # Skip PRs with too many files
+    max_files: int = 500  # Skip PRs with too many files
     max_file_size: int = 100_000  # Skip files larger than 100KB
     file_extensions: frozenset[str] = field(
         default_factory=lambda: frozenset({".c", ".h"})
@@ -114,12 +117,14 @@ class AnalysisPipeline:
         try:
             # 1. Fetch PR info and changed files
             pr_info = await github_client.get_pr_info(repo_owner, repo_name, pr_number)
+            logger.info(f"pr_info: {pr_info}")
             if not pr_info:
+                logger.error(f"pr_info fetch failed")
                 result.error = "Failed to fetch PR info"
                 return result
             
             changed_files = await github_client.get_pr_files(repo_owner, repo_name, pr_number)
-            
+            # logger.info(f"changed_files: {changed_files}")
             # Filter to C/H files only
             c_files = [
                 f for f in changed_files
@@ -127,11 +132,13 @@ class AnalysisPipeline:
             ]
             
             if not c_files:
+                logger.info("no changed files")
                 result.success = True
                 result.skipped_reason = "No C/H files changed"
                 return result
             
             if len(c_files) > self.config.max_files:
+                logger.info("Too many files")
                 result.success = True
                 result.skipped_reason = f"Too many files ({len(c_files)} > {self.config.max_files})"
                 return result
@@ -142,6 +149,7 @@ class AnalysisPipeline:
             base_sha = pr_info["base"]["sha"]
             head_sha = pr_info["head"]["sha"]
             
+            logger.info(f"base: {base_sha}; head: {head_sha}")
             file_asts: dict[str, tuple[FileAST, FileAST]] = {}  # filepath -> (before, after)
             
             for file_info in c_files:
@@ -151,22 +159,26 @@ class AnalysisPipeline:
                 # Get before AST (if file existed)
                 before_ast = FileAST(source_hash="empty")
                 if status != "added":
+                    logger.info(f"status not added: ${status}")
                     before_ast = await self._get_or_parse_ast(
                         github_client, repo_owner, repo_name, base_sha, filepath, result
                     )
-                
+                logger.info(f"before: {before_ast}")
                 # Get after AST (if file still exists)
                 after_ast = FileAST(source_hash="empty")
+                logger.info(f"after: {after_ast}")
                 if status != "removed":
+                    logger.info(f"status not removed: {status}")
                     # Handle renames
                     after_path = file_info.get("previous_filename", filepath) if status == "renamed" else filepath
                     after_ast = await self._get_or_parse_ast(
                         github_client, repo_owner, repo_name, head_sha, filepath, result
                     )
-                
+                logger.info(f"after_ast2: {after_ast}")
                 file_asts[filepath] = (before_ast, after_ast)
             
             # 3. Compute evidence
+            logger.info("Compute evidence")
             file_evidences: list[FileEvidence] = []
             for filepath, (before, after) in file_asts.items():
                 evidence = compute_file_evidence(filepath, before, after)
@@ -174,25 +186,30 @@ class AnalysisPipeline:
                 result.functions_analyzed += len(evidence.functions)
             
             pr_evidence = compute_pr_evidence(file_evidences)
-            
+            logger.info(f"pr_evidence: {pr_evidence}")
             # 4. Triage
             triage_result = triage(pr_evidence)
             result.triage_result = triage_result
-            
+            logger.info(f"tri_res: {triage_result}")
             # 5. Route to LLM (or skip)
             if triage_result.route == Route.SKIP:
+                logger.info(f"Route.SKIP")
                 result.success = True
                 result.skipped_reason = triage_result.skip_reason
+                logger.info(f"skip: {skip_reason}")
+                logger.info(f"5. result: {result}")
                 return result
             
             # 6. LLM Analysis
             if triage_result.route == Route.FAST_PATH:
+                logger.info(f"Route.FAST_PATH")
                 analysis = await llm_client.analyze_fast_path(
                     pr_evidence=pr_evidence,
                     triage_result=triage_result,
                     file_asts=file_asts,
                 )
             else:  # DEEP_ANALYSIS
+                logger.info(f"DEEP_ANALYSIS")
                 analysis = await llm_client.analyze_deep(
                     pr_evidence=pr_evidence,
                     triage_result=triage_result,
@@ -200,11 +217,13 @@ class AnalysisPipeline:
                 )
             
             result.analysis = analysis
+            logger.info(f"result SUCCESS")
             result.success = True
             
         except Exception as e:
             result.error = str(e)
         
+        logger.info(f"final result: result")
         return result
     
     async def _get_or_parse_ast(
@@ -217,7 +236,7 @@ class AnalysisPipeline:
         result: PipelineResult,
     ) -> FileAST:
         """Get AST from cache or parse fresh."""
-        
+        logger.info("ENtered _get_or_parse_ast")
         # Check cache first
         cached = await get_cached_ast(sha, filepath)
         if cached:
@@ -242,6 +261,7 @@ class AnalysisPipeline:
 
 def _file_ast_to_dict(ast: FileAST) -> dict:
     """Convert FileAST to a JSON-serializable dict."""
+    logger.info("entered _file_ast_to_dict")
     return {
         "source_hash": ast.source_hash,
         "has_parse_errors": ast.has_parse_errors,

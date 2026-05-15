@@ -18,9 +18,14 @@ import hashlib
 import os
 from typing import Optional, Any
 from dataclasses import asdict
+import logging
+from dotenv import load_dotenv
 
 from upstash_redis.asyncio import Redis
 
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 # Global Redis client - created at module level for connection reuse
 redis_client: Optional[Redis] = None
 
@@ -38,8 +43,10 @@ async def init_redis() -> None:
     token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
     
     if url and token:
+        logger.info(f"both are there")
         redis_client = Redis(url=url, token=token)
     else:
+        logger.info(f"gone url: {url}, token: {token}")
         # Fallback: try from_env which reads UPSTASH_REDIS_REST_URL/TOKEN
         try:
             redis_client = Redis.from_env()
@@ -102,6 +109,7 @@ async def enqueue_job(job_id: str, job_data: dict) -> bool:
     Uses Redis list for FIFO queue semantics.
     """
     if not redis_client:
+        logger.error("No redis client")
         return False
     
     try:
@@ -113,6 +121,7 @@ async def enqueue_job(job_id: str, job_data: dict) -> bool:
         
         # Add to queue
         await redis_client.lpush("job_queue", job_id)
+        logger.info("Added to redis queue successfully")
         return True
     except Exception as e:
         print(f"Redis enqueue error: {e}")

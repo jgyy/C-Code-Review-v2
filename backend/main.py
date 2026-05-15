@@ -13,7 +13,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router as api_router
 from github_utils.webhook import router as webhook_router
 from cache.redis import redis_client, init_redis
+import logging
+from fastapi.responses import RedirectResponse
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+)
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -59,3 +67,8 @@ app.include_router(webhook_router, prefix="")
 async def health_check():
     """Health check endpoint for load balancers and monitoring."""
     return {"status": "healthy", "service": "c-code-review"}
+
+@app.get("/")
+async def root():
+    # Redirect to health check or documentation
+    return RedirectResponse(url="/health")
