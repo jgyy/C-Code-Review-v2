@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/auth/:path*",
+      "destination": "/api/auth/:path*",
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://premises-come-juvenile.ngrok-free.dev/api/:path*"
     },
