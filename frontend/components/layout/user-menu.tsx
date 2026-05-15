@@ -37,7 +37,7 @@ export function UserMenu() {
   const initials = name
     ? name
         .split(" ")
-        .map((n) => n[0])
+        .map((n: string) => n[0])
         .join("")
         .slice(0, 2)
         .toUpperCase()
