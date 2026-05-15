@@ -32,7 +32,7 @@ from cache.redis import (
 )
 from github_utils.webhook import process_pr_job
 import logging
-
+from typing import Optional, List
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["api"])
@@ -158,6 +158,10 @@ async def get_analysis_result(job_id: str):
         )
     
     # Extract analysis data
+    files_analyzed = result.get("files_analyzed")
+    cache_hits = result.get("cache_hits")
+    cache_misses = result.get("cache_misses")
+
     analysis = result.get("analysis", {})
     
     # Convert function analyses
@@ -169,13 +173,16 @@ async def get_analysis_result(job_id: str):
             risk_signals=fa.get("risk_signals", []),
             suggestion=fa.get("suggestion"),
         ))
-    logger.info(f"j: {job_data}, o: {job_data.get("owner")}")
+    logger.info(f"j: {job_data}, o: {job_data.get('owner')}")
     return AnalysisResultResponse(
         job_id=job_id,
         owner=job_data.get("owner"),
         repo=job_data.get("repo"),
         pr_number=job_data.get("pr_number"),
         status=status,
+        files_analyzed=files_analyzed,
+        cache_hits=cache_hits,
+        cache_misses=cache_misses,
         headline=analysis.get("headline"),
         risk_level=analysis.get("risk_level"),
         risk_score=analysis.get("risk_score"),

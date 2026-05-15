@@ -32,6 +32,8 @@
   --color-status-processing: #3b82f6;
   --color-status-completed: #22c55e;
   --color-status-failed: #ef4444;
+  --color-status-insights: #6366F1;
+  --color-status-recommendations: #10B981;
   
   /* Risk colors */
   --color-risk-low: #22c55e;

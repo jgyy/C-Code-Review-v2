@@ -1,4 +1,7 @@
 // API client for the C Code Review backend
+import { auth } from "@/lib/auth"  // server-side
+// OR in client components:
+import { getSession } from "next-auth/react"
 
 export interface AnalyzeRequest {
   owner: string;
@@ -57,6 +60,8 @@ export interface AnalysisResult {
   function_analyses: FunctionAnalysis[];
   
   // Grouped issues
+  insights: string[];
+  recommendations: string[];
   memory_safety_issues: string[];
   security_concerns: string[];
   potential_bugs: string[];
@@ -80,7 +85,7 @@ export interface HealthStatus {
   llm_configured: boolean;
 }
 
-// const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
+const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
 
 class APIError extends Error {
   constructor(
@@ -97,12 +102,13 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${endpoint}`;
+  const url = `${API_BASE}${endpoint}`;
   
   const response = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "any-value",
       ...options.headers,
     },
   });
@@ -159,3 +165,26 @@ export const api = {
 // SWR fetcher
 export const fetcher = <T>(endpoint: string): Promise<T> =>
   request<T>(endpoint);
+
+
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  // Get token — works server and client side
+  const session = typeof window === "undefined"
+    ? await auth()
+    : await getSession()
+
+  const url = `${API_BASE}${endpoint}`
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "any-value",
+      // Add this:
+      ...(session?.accessToken && {
+        "Authorization": `Bearer ${session.accessToken}`
+      }),
+      ...options.headers,
+    },
+  })
+  // ... rest unchanged
+}

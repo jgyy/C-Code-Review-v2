@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { RefreshCw } from "lucide-react";
+import { useSession, signOut } from "next-auth/react"
 
 const pageTitles: Record<string, string> = {
   "/": "Dashboard",
@@ -13,6 +14,7 @@ const pageTitles: Record<string, string> = {
 
 export function Header() {
   const pathname = usePathname();
+  const { data: session } = useSession()
   
   // Handle dynamic routes
   const getTitle = () => {
@@ -23,7 +25,7 @@ export function Header() {
   };
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
+    <header className="border-b border-border px-6 py-3 flex items-center justify-between">
       <h1 className="text-xl font-semibold text-foreground">{getTitle()}</h1>
       
       <div className="flex items-center gap-4">
@@ -40,6 +42,26 @@ export function Header() {
           <span className="text-sm text-muted-foreground">System Online</span>
         </div>
       </div>
+	 {session?.user && (
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            {session.user.login}
+          </span>
+          <img
+            src={session.user.avatarUrl}
+            alt={session.user.login}
+            className="h-8 w-8 rounded-full ring-1 ring-border"
+          />
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+
     </header>
   );
 }
+

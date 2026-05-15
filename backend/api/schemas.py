@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
 from datetime import datetime
-
+from typing import Optional
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -92,6 +92,11 @@ class AnalysisResultResponse(BaseModel):
     repo_full_name: Optional[str] = None
     pr_number: Optional[int] = None
     
+    # Files analysis
+    files_analyzed: Optional[int] = None
+    cache_hits: Optional[int] = None
+    cache_misses: Optional[int] = None
+
     # Analysis summary
     headline: Optional[str] = None
     risk_level: Optional[str] = None

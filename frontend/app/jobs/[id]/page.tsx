@@ -15,6 +15,8 @@ import {
   Clock,
   Database,
   AlertTriangle,
+  Lightbulb,
+  Sparkles,
   Shield,
   Bug,
   ChevronDown,
@@ -24,70 +26,70 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 // Mock data for demo
-const mockResult: AnalysisResult = {
-  job_id: "job-001",
-  owner: "torvalds",
-  repo: "linux",
-  pr_number: 1234,
-  status: "completed",
-  created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-  completed_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-  triage_decision: "deep_analysis",
-  risk_score: 35,
-  headline: "Memory safety concerns in buffer handling",
-  summary:
-    "This PR introduces changes to the memory management subsystem. The analysis detected potential buffer overflow risks in the new allocation routines and recommends additional bounds checking.",
-  overall_risk: "medium",
-  files_analyzed: 12,
-  cache_hits: 8,
-  cache_misses: 4,
-  function_analyses: [
-    {
-      name: "alloc_buffer",
-      risk_level: "high",
-      summary: "Buffer allocation without proper size validation",
-      issues: [
-        "No upper bound check on requested size",
-        "Potential integer overflow in size calculation",
-      ],
-      recommendations: [
-        "Add size_t overflow check before allocation",
-        "Implement maximum allocation limit",
-      ],
-      line_start: 145,
-      line_end: 178,
-    },
-    {
-      name: "copy_to_user",
-      risk_level: "medium",
-      summary: "User-space copy with unchecked length",
-      issues: ["Length parameter not validated against buffer size"],
-      recommendations: ["Verify length does not exceed allocated buffer"],
-      line_start: 234,
-      line_end: 256,
-    },
-    {
-      name: "init_subsystem",
-      risk_level: "low",
-      summary: "Initialization routine looks safe",
-      issues: [],
-      recommendations: [],
-      line_start: 45,
-      line_end: 89,
-    },
-  ],
-  memory_safety_issues: [
-    "Potential buffer overflow in alloc_buffer at line 156",
-    "Missing null check after kmalloc at line 167",
-  ],
-  security_concerns: [
-    "User-controlled size passed to allocator without validation",
-  ],
-  potential_bugs: [
-    "Return value of copy_to_user not checked",
-    "Memory leak on error path at line 172",
-  ],
-};
+// const mockResult: AnalysisResult = {
+//   job_id: "job-001",
+//   owner: "torvalds",
+//   repo: "linux",
+//   pr_number: 1234,
+//   status: "completed",
+//   created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
+//   completed_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
+//   triage_decision: "deep_analysis",
+//   risk_score: 35,
+//   headline: "Memory safety concerns in buffer handling",
+//   summary:
+//     "This PR introduces changes to the memory management subsystem. The analysis detected potential buffer overflow risks in the new allocation routines and recommends additional bounds checking.",
+//   overall_risk: "medium",
+//   files_analyzed: 12,
+//   cache_hits: 8,
+//   cache_misses: 4,
+//   function_analyses: [
+//     {
+//       name: "alloc_buffer",
+//       risk_level: "high",
+//       summary: "Buffer allocation without proper size validation",
+//       issues: [
+//         "No upper bound check on requested size",
+//         "Potential integer overflow in size calculation",
+//       ],
+//       recommendations: [
+//         "Add size_t overflow check before allocation",
+//         "Implement maximum allocation limit",
+//       ],
+//       line_start: 145,
+//       line_end: 178,
+//     },
+//     {
+//       name: "copy_to_user",
+//       risk_level: "medium",
+//       summary: "User-space copy with unchecked length",
+//       issues: ["Length parameter not validated against buffer size"],
+//       recommendations: ["Verify length does not exceed allocated buffer"],
+//       line_start: 234,
+//       line_end: 256,
+//     },
+//     {
+//       name: "init_subsystem",
+//       risk_level: "low",
+//       summary: "Initialization routine looks safe",
+//       issues: [],
+//       recommendations: [],
+//       line_start: 45,
+//       line_end: 89,
+//     },
+//   ],
+//   memory_safety_issues: [
+//     "Potential buffer overflow in alloc_buffer at line 156",
+//     "Missing null check after kmalloc at line 167",
+//   ],
+//   security_concerns: [
+//     "User-controlled size passed to allocator without validation",
+//   ],
+//   potential_bugs: [
+//     "Return value of copy_to_user not checked",
+//     "Memory leak on error path at line 172",
+//   ],
+// };
 
 function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -163,6 +165,16 @@ function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
   );
 }
 
+export const statusDotColorMap: Record<string, string> = {
+  pending: "bg-yellow-500",          // #eab308
+  processing: "bg-blue-500",         // #3b82f6
+  completed: "bg-green-500",         // #22c55e
+  failed: "bg-red-500",              // #ef4444
+  insights: "bg-indigo-500",         // #6366F1
+  recommendations: "bg-emerald-500", // #10B981
+  risk_high: "bg-red-300"//#f97316
+};
+
 function IssueSection({
   title,
   icon: Icon,
@@ -175,11 +187,11 @@ function IssueSection({
   color: string;
 }) {
   if (issues.length === 0) return null;
-
+  console.log(`color: ${color}`)
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2">
-        <Icon className={cn("h-5 w-5", color)} />
+        <Icon className={cn("h-5 w-5", statusDotColorMap[color])} />
         <h3 className="font-medium text-foreground">{title}</h3>
         <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
           {issues.length}
@@ -188,7 +200,7 @@ function IssueSection({
       <ul className="mt-3 space-y-2">
         {issues.map((issue, i) => (
           <li key={i} className="flex items-start gap-2 text-sm text-foreground">
-            <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", color.replace("text-", "bg-"))} />
+            <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", statusDotColorMap[color])} />
             {issue}
           </li>
         ))}
@@ -210,6 +222,7 @@ export default function JobDetailPage({
     { refreshInterval: (data?: AnalysisResult) => data?.status === "processing" ? 3000 : 0 }
   );
 
+  console.log(`result: ${JSON.stringify(result)}`)
   if (isLoading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -269,6 +282,9 @@ export default function JobDetailPage({
           </a>
         </div>
       </div>
+      {/* console.log(`time completed: ${(new Date(result.completed_at).getTime())}`) */}
+      {/* console.log(`time completed: ${(new Date(result.created_at).getTime())}`) */}
+      {/* console.log(`result: ${result}`) */}
 
       {/* Meta Info */}
       <div className="grid gap-4 sm:grid-cols-4">
@@ -284,6 +300,7 @@ export default function JobDetailPage({
                     new Date(result.created_at).getTime()) /
                     1000
                 )}s`
+              : result.status == 'failed' ? 'NA'
               : "In progress..."}
           </p>
         </div>
@@ -294,7 +311,14 @@ export default function JobDetailPage({
             <span className="text-sm">Cache Performance</span>
           </div>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.cache_hits}/{result.cache_hits + result.cache_misses} hits
+            {!!result.cache_hits && (
+              <>
+                {result.cache_hits}/{result.cache_hits + result.cache_misses} hits
+              </>)}
+            {(!result.cache_hits) && (
+              <>
+                NA
+              </>)}
           </p>
         </div>
 
@@ -303,7 +327,7 @@ export default function JobDetailPage({
             <span className="text-sm">Files Analyzed</span>
           </div>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.files_analyzed}
+            {result.files_analyzed ?? 'NA'}
           </p>
         </div>
 
@@ -312,7 +336,7 @@ export default function JobDetailPage({
             <span className="text-sm">Risk Score</span>
           </div>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.risk_score}/100
+            {result.risk_score ?? '0'}/100
           </p>
         </div>
       </div>
@@ -332,22 +356,34 @@ export default function JobDetailPage({
       {/* Issues Grid */}
       <div className="grid gap-4 lg:grid-cols-3">
         <IssueSection
+          title="Insights"
+          icon={Lightbulb}
+          issues={result.insights}
+          color="insights"
+        />
+        <IssueSection
+          title="Recommendations"
+          icon={Sparkles}
+          issues={result.recommendations}
+          color="recommendations"
+        />
+        <IssueSection
           title="Memory Safety"
           icon={AlertTriangle}
           issues={result.memory_safety_issues}
-          color="text-status-failed"
+          color="failed"
         />
         <IssueSection
           title="Security Concerns"
           icon={Shield}
           issues={result.security_concerns}
-          color="text-risk-high"
+          color="risk_high"
         />
         <IssueSection
           title="Potential Bugs"
           icon={Bug}
           issues={result.potential_bugs}
-          color="text-status-pending"
+          color="pending"
         />
       </div>
 

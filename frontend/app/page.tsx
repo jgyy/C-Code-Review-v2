@@ -8,7 +8,7 @@ import { fetcher, api } from "@/lib/api";
 import type { CacheStats, JobStatus, AnalysisResult } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
-// const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE;
+const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE;
 
 export default function DashboardPage() {
   // Fetch cache stats
