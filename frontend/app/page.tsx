@@ -8,12 +8,12 @@ import { fetcher, api } from "@/lib/api";
 import type { CacheStats, JobStatus, AnalysisResult } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE;
+// const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE;
 
 export default function DashboardPage() {
   // Fetch cache stats
   const { data: cacheStats, isLoading: cacheLoading } = useSWR<CacheStats>(
-    `${API_BASE}/api/cache/stats`,
+    `/api/cache/stats`,
     fetcher,
     {
       refreshInterval: 30000, // Refresh every 30s
@@ -24,7 +24,7 @@ export default function DashboardPage() {
 
   // Fetch recent jobs
   const { data: jobsData, isLoading: jobsLoading } = useSWR<{ jobs: JobStatus[]; total: number }>(
-    `${API_BASE}/api/jobs?limit=5`,
+    `/api/jobs?limit=5`,
     fetcher,
     {
       refreshInterval: 10000, // Refresh every 10s

@@ -80,7 +80,7 @@ export interface HealthStatus {
   llm_configured: boolean;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
+// const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
 
 class APIError extends Error {
   constructor(
@@ -97,7 +97,7 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
+  const url = `${endpoint}`;
   
   const response = await fetch(url, {
     ...options,
