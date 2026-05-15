@@ -16,3 +16,7 @@ node_modules
 
 .pnpm-store/
 .vercel
+
+backend/.env
+backend/.venv
+backend/__pycache__

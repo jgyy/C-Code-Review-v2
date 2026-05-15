@@ -1,7 +1,6 @@
-// API client for the C Code Review backend
-import { auth } from "@/lib/auth"  // server-side
-// OR in client components:
 import { getSession } from "next-auth/react"
+import { getServerSession } from "next-auth"
+import { authOptions } from "@/lib/auth"
 
 export interface AnalyzeRequest {
   owner: string;
@@ -88,90 +87,24 @@ export interface HealthStatus {
 const API_BASE = process.env.NEXT_PUBLIC_API_SERVICE
 
 class APIError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public body?: unknown
-  ) {
-    super(message);
-    this.name = "APIError";
+  constructor(message: string, public status: number, public body?: unknown) {
+    super(message)
+    this.name = "APIError"
   }
 }
-
-async function request<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
-  
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "ngrok-skip-browser-warning": "any-value",
-      ...options.headers,
-    },
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new APIError(
-      body?.detail || `Request failed with status ${response.status}`,
-      response.status,
-      body
-    );
-  }
-
-  return response.json();
-}
-
-export const api = {
-  // Trigger analysis
-  analyze: (data: AnalyzeRequest) =>
-    request<{ job_id: string }>("/api/analyze", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  // Get job status
-  getStatus: (jobId: string) =>
-    request<JobStatus>(`/status/${jobId}`),
-
-  // Get full analysis result
-  getResult: (jobId: string) =>
-    request<AnalysisResult>(`/result/${jobId}`),
-
-  // Get cache stats
-  getCacheStats: () =>
-    request<CacheStats>("/cache/stats"),
-
-  // Clear cache
-  clearCache: () =>
-    request<{ cleared: number }>("/cache/clear", {
-      method: "POST",
-    }),
-
-  // Health check
-  health: () =>
-    request<HealthStatus>("/health"),
-
-  // List recent jobs (mock - would need backend endpoint)
-  listJobs: (limit = 50, offset = 0) =>
-    request<{ jobs: JobStatus[]; total: number }>(
-      `/jobs?limit=${limit}&offset=${offset}`
-    ),
-};
-
-// SWR fetcher
-export const fetcher = <T>(endpoint: string): Promise<T> =>
-  request<T>(endpoint);
-
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  // Get token — works server and client side
-  const session = typeof window === "undefined"
-    ? await auth()
-    : await getSession()
+  let accessToken: string | undefined
+
+  if (typeof window === "undefined") {
+    // Server-side: use getServerSession with authOptions
+    const session = await getServerSession(authOptions)
+    accessToken = session?.accessToken
+  } else {
+    // Client-side
+    const session = await getSession()
+    accessToken = session?.accessToken
+  }
 
   const url = `${API_BASE}${endpoint}`
   const response = await fetch(url, {
@@ -179,12 +112,29 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers: {
       "Content-Type": "application/json",
       "ngrok-skip-browser-warning": "any-value",
-      // Add this:
-      ...(session?.accessToken && {
-        "Authorization": `Bearer ${session.accessToken}`
-      }),
+      ...(accessToken && { Authorization: `Bearer ${accessToken}` }),
       ...options.headers,
     },
   })
-  // ... rest unchanged
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new APIError(response.statusText, response.status, body)
+  }
+
+  return response.json()
 }
+
+export const api = {
+  analyze: (data: AnalyzeRequest) =>
+    request<{ job_id: string }>("/api/analyze", { method: "POST", body: JSON.stringify(data) }),
+  getStatus: (jobId: string) => request<JobStatus>(`/status/${jobId}`),
+  getResult: (jobId: string) => request<AnalysisResult>(`/result/${jobId}`),
+  getCacheStats: () => request<CacheStats>("/cache/stats"),
+  clearCache: () => request<{ cleared: number }>("/cache/clear", { method: "POST" }),
+  health: () => request<HealthStatus>("/health"),
+  listJobs: (limit = 50, offset = 0) =>
+    request<{ jobs: JobStatus[]; total: number }>(`/jobs?limit=${limit}&offset=${offset}`),
+}
+
+export const fetcher = <T>(endpoint: string): Promise<T> => request<T>(endpoint)
