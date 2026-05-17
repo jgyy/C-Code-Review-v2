@@ -6,11 +6,11 @@
     },
     {
       "source": "/api/:path*",
-      "destination": "https://premises-come-juvenile.ngrok-free.dev/api/:path*"
+      "destination": "https://5yolv6hec8.execute-api.ap-southeast-1.amazonaws.com/api/:path*"
     },
     {
       "source": "/webhook",
-      "destination": "https://premises-come-juvenile.ngrok-free.dev/webhook"
+      "destination": "https://5yolv6hec8.execute-api.ap-southeast-1.amazonaws.com/webhook"
     }
   ],
   "headers": [

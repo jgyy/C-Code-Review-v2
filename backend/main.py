@@ -15,6 +15,7 @@ from github_utils.webhook import router as webhook_router
 from cache.redis import redis_client, init_redis
 import logging
 from fastapi.responses import RedirectResponse
+from mangum import Mangum
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,3 +76,5 @@ async def health_check():
 async def root():
     # Redirect to health check or documentation
     return RedirectResponse(url="/health")
+
+handler = Mangum(app)
