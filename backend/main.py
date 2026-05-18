@@ -39,8 +39,13 @@ async def lifespan(app: FastAPI):
     _ = extract_file_ast("int main() { return 0; }")
     
     yield
-    
-    # Shutdown - Redis client doesn't need explicit cleanup (HTTP-based)
+
+    from workers.pool import shutdown_pool
+    try:
+        await shutdown_pool()
+        logger.info("Parser thread pool shut down successfully.")
+    except Exception as e:
+        logger.error(f"Error shutting down parser thread pool: {e}")
 
 
 app = FastAPI(

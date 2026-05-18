@@ -7,11 +7,27 @@ provider:
   environment:
     STAGE: prod
 
+layers: # This is to have two lambda functions share code
+  sharedCode:
+    path: layer
+    compatibleRuntimes:
+      - python3.11
+
 functions:
   api:
     handler: main.handler # From where Mangum runs in your code
+    layers:
+      - { Ref: SharedCodeLambdaLayer }
     events:
       - httpApi: '*'
+
+  worker:
+    handler: worker.lambda_handler # Other lambda handler to run background jobs
+    layers:
+      - { Ref: SharedCodeLambdaLayer }
+    events:
+      - sqs: # SQS queue where the background jobs will be pushed
+          arn: arn:aws:sqs:us-east-1:123456789012:PRJobQueue
 
 custom:
   pythonRequirements:

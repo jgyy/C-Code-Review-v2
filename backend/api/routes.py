@@ -33,6 +33,8 @@ from cache.redis import (
 from github_utils.webhook import process_pr_job
 import logging
 from typing import Optional, List
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["api"])
@@ -51,6 +53,7 @@ async def analyze_pr(
     """
     # Generate job ID
     job_id = f"manual-{request.owner}-{request.repo}-{request.pr_number}-{uuid.uuid4().hex[:8]}"
+    logger.info(f"Analyze request received for job: {job_id}")
     
     # Queue the job
     job_data = {
@@ -61,9 +64,11 @@ async def analyze_pr(
         "installation_id": request.installation_id,
     }
     
+    # asyncio.create_task(enqueue_job(job_id, job_data))
     success = await enqueue_job(job_id, job_data)
     logger.info(f"enqueue: {success}")    
     if not success:
+        logger.error(f"Analyze request failed for job: {job_id}")
         raise HTTPException(
             status_code=503,
             detail="Failed to queue job. Redis may be unavailable."
@@ -82,7 +87,7 @@ async def analyze_pr(
     return AnalyzeResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
-        message=f"Analysis queued for {request.owner}/{request.repo}#{request.pr_number}",
+        message=f"Analysis queued for {request.owner}/{request.repo}/{request.pr_number}",
     )
 
 
