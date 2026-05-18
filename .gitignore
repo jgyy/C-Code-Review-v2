@@ -20,3 +20,5 @@ node_modules
 backend/.env
 backend/.venv
 __pycache__/
+
+.serverless/

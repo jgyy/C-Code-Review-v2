@@ -21,13 +21,13 @@ functions:
     events:
       - httpApi: '*'
 
-  worker:
-    handler: worker.lambda_handler # Other lambda handler to run background jobs
-    layers:
-      - { Ref: SharedCodeLambdaLayer }
-    events:
-      - sqs: # SQS queue where the background jobs will be pushed
-          arn: arn:aws:sqs:us-east-1:123456789012:PRJobQueue
+//  worker:
+//    handler: worker.lambda_handler # Other lambda handler to run background jobs
+//    layers:
+//      - { Ref: SharedCodeLambdaLayer }
+//    events:
+//      - sqs: # SQS queue where the background jobs will be pushed
+//          arn: arn:aws:sqs:us-east-1:123456789012:PRJobQueue
 
 custom:
   pythonRequirements:
