@@ -6,6 +6,16 @@ provider:
   region: ap-southeast-1
   environment:
     STAGE: prod
+    UPSTASH_REDIS_REST_URL: ${env:UPSTASH_REDIS_REST_URL}
+    UPSTASH_REDIS_REST_TOKEN: ${env:UPSTASH_REDIS_REST_TOKEN}
+    GITHUB_TOKEN: ${env:GITHUB_TOKEN, ''}
+    GITHUB_APP_ID: ${env:GITHUB_APP_ID, ''}
+    GITHUB_PRIVATE_KEY: ${env:GITHUB_PRIVATE_KEY, ''}
+    GITHUB_WEBHOOK_SECRET: ${env:GITHUB_WEBHOOK_SECRET, ''}
+    GEMINI_API_KEY: ${env:GEMINI_API_KEY, ''}
+
+plugins:
+  - serverless-dotenv-plugin
 
 # layers: # This is to have two lambda functions share code
 #   sharedCode:
@@ -16,7 +26,7 @@ provider:
 functions:
   api:
     handler: main.handler # From where Mangum runs in your code
-    timeout: 300
+    timeout: 30
     memorySize: 512
     # layers:
     #   - { Ref: SharedCodeLambdaLayer }
