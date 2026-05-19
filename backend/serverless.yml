@@ -1,7 +1,7 @@
 service: c-code-review
 
 provider:
-  name: aws # Where to host
+  name: aws
   runtime: python3.11
   region: ap-southeast-1
   environment:
@@ -13,50 +13,42 @@ provider:
     GITHUB_PRIVATE_KEY: ${env:GITHUB_PRIVATE_KEY, ''}
     GITHUB_WEBHOOK_SECRET: ${env:GITHUB_WEBHOOK_SECRET, ''}
     GEMINI_API_KEY: ${env:GEMINI_API_KEY, ''}
+    # Must match the full deployed function name: {service}-{stage}-{function_key}
+    WORKER_FUNCTION_NAME: c-code-review-dev-worker
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:c-code-review-dev-worker"
 
 plugins:
   - serverless-dotenv-plugin
 
-# layers: # This is to have two lambda functions share code
-#   sharedCode:
-#     path: layer
-#     compatibleRuntimes:
-#       - python3.11
-
 functions:
   api:
-    handler: main.handler # From where Mangum runs in your code
-    timeout: 30
+    handler: main.handler
+    timeout: 29
     memorySize: 512
-    # layers:
-    #   - { Ref: SharedCodeLambdaLayer }
     events:
       - httpApi: '*'
 
-# //  worker:
-# //    handler: worker.lambda_handler # Other lambda handler to run background jobs
-# //    layers:
-# //      - { Ref: SharedCodeLambdaLayer }
-# //    events:
-# //      - sqs: # SQS queue where the background jobs will be pushed
-# //          arn: arn:aws:sqs:us-east-1:123456789012:PRJobQueue
+  worker:
+    handler: worker.lambda_handler
+    timeout: 900
+    memorySize: 512
+    # No httpApi event — invoked directly by the api function via boto3
 
 custom:
   pythonRequirements:
-    dockerizePip: true     # Ensures Linux-compatible packages for Lambda
+    dockerizePip: true
     useStaticCache: false
-    invalidateCache: true # To avoid running the existing package and start new
-    slim: true             # Remove unnecessary files from packages
-    # manyLinux: true # Avoids Rust compilation and forces use of manyLinux wheels
-    # cacheDir: "./.serverless-cache" # Store in project local
-    # pipCmdExtraArgs:
-    #   - "--only-binary=tree-sitter-language-pack"
-    # environment:
-    #   RUSTUP_HOME: /root/.cache/puccinialin
-    #   CARGO_HOME: /root/.cache/puccinialin/cargo
-    #   PATH: /root/.cache/puccinialin/cargo/bin:$PATH
+    invalidateCache: true
+    slim: true
     noDeploy:
-      - boto3              # Already provided by Lambda runtime
+      - boto3
       - botocore
       - awscli
       - uvicorn
@@ -72,7 +64,7 @@ package:
     - "*.pyo"
     - "*.pyd"
     - .vscode/**
-    - local_config/**      # Any local-only files
+    - local_config/**
     - .venv/**
     - .env
     - Procfile

@@ -9,8 +9,12 @@ Provides endpoints for:
 """
 
 from __future__ import annotations
+import asyncio
+import json
+import os
 import uuid
 
+import boto3
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import (
@@ -30,9 +34,21 @@ from cache.redis import (
     get_cache_stats,
     list_jobs,
 )
-from github_utils.webhook import process_pr_job
 import logging
 from typing import Optional
+
+# Constructed once at module level - boto3 clients are thread-safe and cheap to reuse.
+# The function name follows Serverless Framework's naming convention:
+#   {service}-{stage}-{function_key}
+# Read from env so it can be overridden without a redeploy (staging vs prod).
+_WORKER_FUNCTION_NAME = os.environ.get(
+    "WORKER_FUNCTION_NAME",
+    "c-code-review-dev-worker",
+)
+_lambda_client = boto3.client(
+    "lambda",
+    region_name=os.environ.get("AWS_REGION", "ap-southeast-1"),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +56,19 @@ router = APIRouter(tags=["api"])
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze_pr(
-    request: AnalyzeRequest,
-):
+async def analyze_pr(request: AnalyzeRequest):
     """
     Trigger analysis of a PR.
 
-    On AWS Lambda the execution context is frozen the moment a response is
-    sent, so BackgroundTasks never complete. Instead we run the pipeline
-    synchronously within this invocation and return after it finishes.
-    The job ID is still stored in Redis so the /status and /result endpoints
-    work unchanged.
+    Enqueues the job in Redis (fast), then fires off the worker Lambda
+    asynchronously (InvocationType='Event') and returns the job ID immediately.
+    The entire handler completes well within API Gateway's 30s hard limit.
+    The worker Lambda runs independently with a 900s timeout and writes its
+    result back to Redis. The frontend polls /api/status/{job_id} as before.
     """
-    # Generate job ID
     job_id = f"manual-{request.owner}-{request.repo}-{request.pr_number}-{uuid.uuid4().hex[:8]}"
     logger.info(f"Analyze request received for job: {job_id}")
 
-    # Queue the job (stores initial "pending" state in Redis)
     job_data = {
         "owner": request.owner,
         "repo": request.repo,
@@ -68,26 +80,50 @@ async def analyze_pr(
     success = await enqueue_job(job_id, job_data)
     logger.info(f"enqueue: {success}")
     if not success:
-        logger.error(f"Analyze request failed for job: {job_id}")
+        logger.error(f"Failed to enqueue job: {job_id}")
         raise HTTPException(
             status_code=503,
-            detail="Failed to queue job. Redis may be unavailable."
+            detail="Failed to queue job. Redis may be unavailable.",
         )
 
-    # Run pipeline synchronously — Lambda context stays alive for the duration
-    # of this request, so awaiting here is safe and necessary.
-    await process_pr_job(
-        job_id=job_id,
-        owner=request.owner,
-        repo_name=request.repo,
-        pr_number=request.pr_number,
-        installation_id=request.installation_id,
-    )
+    # boto3.invoke is synchronous — run it in a thread so we don't block the
+    # asyncio event loop. InvocationType='Event' means fire-and-forget: AWS
+    # queues the invocation and returns HTTP 202 in ~100-200ms without waiting
+    # for the worker to finish.
+    payload = json.dumps({
+        "job_id": job_id,
+        "owner": request.owner,
+        "repo_name": request.repo,
+        "pr_number": request.pr_number,
+        "installation_id": request.installation_id,
+    })
+
+    try:
+        response = await asyncio.to_thread(
+            _lambda_client.invoke,
+            FunctionName=_WORKER_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=payload,
+        )
+        status_code = response.get("StatusCode")
+        # 202 Accepted is the success code for async Lambda invocation
+        if status_code != 202:
+            raise RuntimeError(f"Unexpected Lambda invoke status: {status_code}")
+        logger.info(f"Worker Lambda invoked for job {job_id}, status {status_code}")
+    except Exception as e:
+        # Worker invocation failed — job is enqueued in Redis but won't run.
+        # Return 500 so the client knows something went wrong rather than
+        # polling forever on a job that will never complete.
+        logger.exception(f"Failed to invoke worker Lambda for job {job_id}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start analysis worker: {e}",
+        )
 
     return AnalyzeResponse(
         job_id=job_id,
-        status=JobStatus.COMPLETED,
-        message=f"Analysis completed for {request.owner}/{request.repo}/{request.pr_number}",
+        status=JobStatus.PENDING,
+        message=f"Analysis started for {request.owner}/{request.repo}/{request.pr_number}",
     )
 
 

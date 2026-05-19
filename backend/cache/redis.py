@@ -35,24 +35,41 @@ JOB_TTL = 3600  # 1 hour
 RESULT_TTL = 86400 * 7  # 7 days
 
 
-async def init_redis() -> None:
-    """Initialize the Redis client from environment variables."""
-    global redis_client
-    
+def _build_redis_client() -> Optional[Redis]:
+    """
+    Build a Redis client from environment variables.
+    Called at lifespan startup AND lazily on first use, so Lambda cold starts
+    that somehow skip lifespan still get a working client.
+    """
     url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
     token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
-    
+
     if url and token:
-        logger.info(f"both are there")
-        redis_client = Redis(url=url, token=token)
-    else:
-        logger.info(f"gone url: {url}, token: {token}")
-        # Fallback: try from_env which reads UPSTASH_REDIS_REST_URL/TOKEN
-        try:
-            redis_client = Redis.from_env()
-        except Exception:
-            print("Warning: Redis not configured. Caching disabled.")
-            redis_client = None
+        logger.info("Redis: connecting with explicit URL/token")
+        return Redis(url=url, token=token)
+
+    logger.warning(f"Redis: env vars missing (url={url!r}, token={'set' if token else 'unset'})")
+    try:
+        return Redis.from_env()
+    except Exception as e:
+        logger.error(f"Redis: from_env() failed: {e}")
+        return None
+
+
+async def init_redis() -> None:
+    """Initialize the Redis client. Called from FastAPI lifespan on startup."""
+    global redis_client
+    redis_client = _build_redis_client()
+    if redis_client is None:
+        logger.error("Redis not configured — caching and job queue disabled")
+
+
+def _get_redis() -> Optional[Redis]:
+    """Return the Redis client, initialising lazily if needed (e.g. Lambda cold start)."""
+    global redis_client
+    if redis_client is None:
+        redis_client = _build_redis_client()
+    return redis_client
 
 
 def _hash_filepath(filepath: str) -> str:
@@ -69,12 +86,13 @@ async def get_cached_ast(sha: str, filepath: str) -> Optional[dict]:
     Retrieve a cached AST for a specific file at a specific commit.
     Returns None if not cached or Redis unavailable.
     """
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return None
     
     key = f"ast:{sha}:{_hash_filepath(filepath)}"
     try:
-        data = await redis_client.get(key)
+        data = await rc.get(key)
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
@@ -87,12 +105,13 @@ async def set_cached_ast(sha: str, filepath: str, ast_data: dict) -> bool:
     Cache an AST for a specific file at a specific commit.
     Returns True on success, False on failure.
     """
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return False
     
     key = f"ast:{sha}:{_hash_filepath(filepath)}"
     try:
-        await redis_client.set(key, json.dumps(ast_data), ex=AST_CACHE_TTL)
+        await rc.set(key, json.dumps(ast_data), ex=AST_CACHE_TTL)
         return True
     except Exception as e:
         print(f"Redis set error: {e}")
@@ -108,19 +127,20 @@ async def enqueue_job(job_id: str, job_data: dict) -> bool:
     Add a job to the processing queue.
     Uses Redis list for FIFO queue semantics.
     """
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         logger.error("No redis client")
         return False
     
     try:
         # Store job metadata
-        await redis_client.set(f"job:{job_id}", json.dumps({
+        await rc.set(f"job:{job_id}", json.dumps({
             **job_data,
             "status": "pending",
         }), ex=JOB_TTL)
         
         # Add to queue
-        await redis_client.lpush("job_queue", job_id)
+        await rc.lpush("job_queue", job_id)
         logger.info("Added to redis queue successfully")
         return True
     except Exception as e:
@@ -133,17 +153,18 @@ async def dequeue_job() -> Optional[tuple[str, dict]]:
     Get the next job from the queue.
     Returns (job_id, job_data) or None if queue is empty.
     """
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return None
     
     try:
         # Pop from queue (blocking with timeout)
-        job_id = await redis_client.rpop("job_queue")
+        job_id = await rc.rpop("job_queue")
         if not job_id:
             return None
         
         # Get job metadata
-        job_data = await redis_client.get(f"job:{job_id}")
+        job_data = await rc.get(f"job:{job_id}")
         if job_data:
             data = json.loads(job_data) if isinstance(job_data, str) else job_data
             return (job_id, data)
@@ -154,20 +175,25 @@ async def dequeue_job() -> Optional[tuple[str, dict]]:
 
 async def update_job_status(job_id: str, status: str, result: Optional[dict] = None) -> bool:
     """Update job status and optionally store result."""
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return False
     
     try:
-        # Get existing job data
-        existing = await redis_client.get(f"job:{job_id}")
+        # Merge with existing data if present; otherwise write a minimal record.
+        # The key may have expired (JOB_TTL) if the worker took a long time to
+        # start — we still write the status so polling endpoints see the update.
+        existing = await rc.get(f"job:{job_id}")
         if existing:
             data = json.loads(existing) if isinstance(existing, str) else existing
-            data["status"] = status
-            await redis_client.set(f"job:{job_id}", json.dumps(data), ex=JOB_TTL)
+        else:
+            data = {"job_id": job_id}
+        data["status"] = status
+        await rc.set(f"job:{job_id}", json.dumps(data), ex=JOB_TTL)
         
         # Store result if provided
         if result:
-            await redis_client.set(f"result:{job_id}", json.dumps(result), ex=RESULT_TTL)
+            await rc.set(f"result:{job_id}", json.dumps(result), ex=RESULT_TTL)
         
         return True
     except Exception as e:
@@ -177,11 +203,12 @@ async def update_job_status(job_id: str, status: str, result: Optional[dict] = N
 
 async def get_job_status(job_id: str) -> Optional[dict]:
     """Get current job status."""
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return None
     
     try:
-        data = await redis_client.get(f"job:{job_id}")
+        data = await rc.get(f"job:{job_id}")
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
@@ -191,11 +218,12 @@ async def get_job_status(job_id: str) -> Optional[dict]:
 
 async def get_job_result(job_id: str) -> Optional[dict]:
     """Get job result if completed."""
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return None
     
     try:
-        data = await redis_client.get(f"result:{job_id}")
+        data = await rc.get(f"result:{job_id}")
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
@@ -212,12 +240,13 @@ async def list_jobs(limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
     List recent jobs with pagination.
     Returns (jobs, total_count) where jobs are sorted by most recent first.
     """
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return ([], 0)
 
     try:
         # Get all job keys
-        keys = await redis_client.keys("job:*")
+        keys = await rc.keys("job:*")
         if not keys:
             return ([], 0)
 
@@ -225,7 +254,7 @@ async def list_jobs(limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
         jobs = []
         for key in keys:
             try:
-                data = await redis_client.get(key)
+                data = await rc.get(key)
                 if data:
                     job_data = json.loads(data) if isinstance(data, str) else data
                     # Extract job_id from the key (format: "job:{job_id}")
@@ -250,12 +279,13 @@ async def list_jobs(limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
 
 async def get_cache_stats() -> dict:
     """Get cache statistics for monitoring."""
-    if not redis_client:
+    rc = _get_redis()
+    if not rc:
         return {"status": "disabled", "reason": "Redis not configured"}
 
     try:
         # Count keys by pattern (approximate)
-        info = await redis_client.dbsize()
+        info = await rc.dbsize()
         return {
             "status": "connected",
             "total_keys": info,
