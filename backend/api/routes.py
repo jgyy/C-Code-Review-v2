@@ -11,7 +11,7 @@ Provides endpoints for:
 from __future__ import annotations
 import uuid
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 
 from api.schemas import (
     AnalyzeRequest,
@@ -32,8 +32,7 @@ from cache.redis import (
 )
 from github_utils.webhook import process_pr_job
 import logging
-from typing import Optional, List
-import asyncio
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +42,21 @@ router = APIRouter(tags=["api"])
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_pr(
     request: AnalyzeRequest,
-    background_tasks: BackgroundTasks,
 ):
     """
     Trigger analysis of a PR.
-    
-    This endpoint queues a job for background processing and returns
-    immediately with a job ID that can be used to check status.
+
+    On AWS Lambda the execution context is frozen the moment a response is
+    sent, so BackgroundTasks never complete. Instead we run the pipeline
+    synchronously within this invocation and return after it finishes.
+    The job ID is still stored in Redis so the /status and /result endpoints
+    work unchanged.
     """
     # Generate job ID
     job_id = f"manual-{request.owner}-{request.repo}-{request.pr_number}-{uuid.uuid4().hex[:8]}"
     logger.info(f"Analyze request received for job: {job_id}")
-    
-    # Queue the job
+
+    # Queue the job (stores initial "pending" state in Redis)
     job_data = {
         "owner": request.owner,
         "repo": request.repo,
@@ -63,31 +64,30 @@ async def analyze_pr(
         "action": "manual",
         "installation_id": request.installation_id,
     }
-    
-    # asyncio.create_task(enqueue_job(job_id, job_data))
+
     success = await enqueue_job(job_id, job_data)
-    logger.info(f"enqueue: {success}")    
+    logger.info(f"enqueue: {success}")
     if not success:
         logger.error(f"Analyze request failed for job: {job_id}")
         raise HTTPException(
             status_code=503,
             detail="Failed to queue job. Redis may be unavailable."
         )
-    
-    # Process in background
-    background_tasks.add_task(
-        process_pr_job,
+
+    # Run pipeline synchronously — Lambda context stays alive for the duration
+    # of this request, so awaiting here is safe and necessary.
+    await process_pr_job(
         job_id=job_id,
         owner=request.owner,
         repo_name=request.repo,
         pr_number=request.pr_number,
         installation_id=request.installation_id,
     )
-    
+
     return AnalyzeResponse(
         job_id=job_id,
-        status=JobStatus.PENDING,
-        message=f"Analysis queued for {request.owner}/{request.repo}/{request.pr_number}",
+        status=JobStatus.COMPLETED,
+        message=f"Analysis completed for {request.owner}/{request.repo}/{request.pr_number}",
     )
 
 

@@ -160,8 +160,10 @@ class AnalysisPipeline:
                 before_ast = FileAST(source_hash="empty")
                 if status != "added":
                     logger.info(f"status not added: ${status}")
+                    # For renames, the old file lives at previous_filename
+                    before_path = file_info.get("previous_filename", filepath) if status == "renamed" else filepath
                     before_ast = await self._get_or_parse_ast(
-                        github_client, repo_owner, repo_name, base_sha, filepath, result
+                        github_client, repo_owner, repo_name, base_sha, before_path, result
                     )
                 logger.info(f"before: {before_ast}")
                 # Get after AST (if file still exists)
@@ -169,8 +171,7 @@ class AnalysisPipeline:
                 logger.info(f"after: {after_ast}")
                 if status != "removed":
                     logger.info(f"status not removed: {status}")
-                    # Handle renames
-                    after_path = file_info.get("previous_filename", filepath) if status == "renamed" else filepath
+                    # For renames, the new file lives at filepath (the new name)
                     after_ast = await self._get_or_parse_ast(
                         github_client, repo_owner, repo_name, head_sha, filepath, result
                     )
@@ -196,7 +197,7 @@ class AnalysisPipeline:
                 logger.info(f"Route.SKIP")
                 result.success = True
                 result.skipped_reason = triage_result.skip_reason
-                logger.info(f"skip: {skip_reason}")
+                logger.info(f"skip: {triage_result.skip_reason}")
                 logger.info(f"5. result: {result}")
                 return result
             
