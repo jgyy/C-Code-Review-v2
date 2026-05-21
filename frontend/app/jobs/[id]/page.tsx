@@ -3,7 +3,7 @@
 import { use } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { format, formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, isValid } from "date-fns";
 import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 import { RiskBadge } from "@/components/jobs/risk-badge";
 import { fetcher } from "@/lib/api";
@@ -25,135 +25,103 @@ import {
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
-// Mock data for demo
-// const mockResult: AnalysisResult = {
-//   job_id: "job-001",
-//   owner: "torvalds",
-//   repo: "linux",
-//   pr_number: 1234,
-//   status: "completed",
-//   created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-//   completed_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-//   triage_decision: "deep_analysis",
-//   risk_score: 35,
-//   headline: "Memory safety concerns in buffer handling",
-//   summary:
-//     "This PR introduces changes to the memory management subsystem. The analysis detected potential buffer overflow risks in the new allocation routines and recommends additional bounds checking.",
-//   overall_risk: "medium",
-//   files_analyzed: 12,
-//   cache_hits: 8,
-//   cache_misses: 4,
-//   function_analyses: [
-//     {
-//       name: "alloc_buffer",
-//       risk_level: "high",
-//       summary: "Buffer allocation without proper size validation",
-//       issues: [
-//         "No upper bound check on requested size",
-//         "Potential integer overflow in size calculation",
-//       ],
-//       recommendations: [
-//         "Add size_t overflow check before allocation",
-//         "Implement maximum allocation limit",
-//       ],
-//       line_start: 145,
-//       line_end: 178,
-//     },
-//     {
-//       name: "copy_to_user",
-//       risk_level: "medium",
-//       summary: "User-space copy with unchecked length",
-//       issues: ["Length parameter not validated against buffer size"],
-//       recommendations: ["Verify length does not exceed allocated buffer"],
-//       line_start: 234,
-//       line_end: 256,
-//     },
-//     {
-//       name: "init_subsystem",
-//       risk_level: "low",
-//       summary: "Initialization routine looks safe",
-//       issues: [],
-//       recommendations: [],
-//       line_start: 45,
-//       line_end: 89,
-//     },
-//   ],
-//   memory_safety_issues: [
-//     "Potential buffer overflow in alloc_buffer at line 156",
-//     "Missing null check after kmalloc at line 167",
-//   ],
-//   security_concerns: [
-//     "User-controlled size passed to allocator without validation",
-//   ],
-//   potential_bugs: [
-//     "Return value of copy_to_user not checked",
-//     "Memory leak on error path at line 172",
-//   ],
-// };
+function safeFormatDistance(dateStr?: string): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (!isValid(d) || d.getFullYear() < 2020) return "—";
+  return formatDistanceToNow(d, { addSuffix: true });
+}
 
+function safeDurationSeconds(createdAt?: string, completedAt?: string): string {
+  if (!createdAt || !completedAt) return "—";
+  const start = new Date(createdAt);
+  const end = new Date(completedAt);
+  if (!isValid(start) || !isValid(end) || start.getFullYear() < 2020) return "—";
+  const secs = Math.round((end.getTime() - start.getTime()) / 1000);
+  if (secs < 0) return "—";
+  return `${secs}s`;
+}
+
+// Matches backend FunctionAnalysisOutput exactly
 function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  const hasDetails =
+    analysis.risk_signals.length > 0 ||
+    analysis.suggestion ||
+    analysis.potential_bugs.length > 0 ||
+    analysis.security_concerns.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-secondary/30">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="flex w-full items-center justify-between px-4 py-3 text-left"
+        disabled={!hasDetails}
       >
         <div className="flex items-center gap-3">
-          {isExpanded ? (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          {hasDetails ? (
+            isExpanded ? (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            )
           ) : (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            <span className="h-4 w-4" />
           )}
-          <code className="font-mono text-sm text-foreground">
-            {analysis.name}()
-          </code>
-          {analysis.line_start && (
-            <span className="text-xs text-muted-foreground">
-              L{analysis.line_start}-{analysis.line_end}
-            </span>
-          )}
+          <code className="font-mono text-sm text-foreground">{analysis.name}()</code>
         </div>
         <RiskBadge level={analysis.risk_level} size="sm" />
       </button>
 
-      {isExpanded && (
+      {isExpanded && hasDetails && (
         <div className="border-t border-border px-4 py-3 space-y-3">
-          <p className="text-sm text-muted-foreground">{analysis.summary}</p>
+          {analysis.suggestion && (
+            <p className="text-sm text-muted-foreground">{analysis.suggestion}</p>
+          )}
 
-          {analysis.issues.length > 0 && (
+          {analysis.risk_signals.length > 0 && (
             <div>
-              <h5 className="text-xs font-medium uppercase text-muted-foreground">
-                Issues
+              <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Risk Signals
               </h5>
               <ul className="mt-1 space-y-1">
-                {analysis.issues.map((issue, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm text-foreground"
-                  >
-                    <span className="mt-1.5 h-1 w-1 rounded-full bg-status-failed" />
-                    {issue}
+                {analysis.risk_signals.map((signal, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-foreground">
+                    <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-status-pending" />
+                    {signal}
                   </li>
                 ))}
               </ul>
             </div>
           )}
 
-          {analysis.recommendations.length > 0 && (
+          {analysis.potential_bugs.length > 0 && (
             <div>
-              <h5 className="text-xs font-medium uppercase text-muted-foreground">
-                Recommendations
+              <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Potential Bugs
               </h5>
               <ul className="mt-1 space-y-1">
-                {analysis.recommendations.map((rec, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm text-foreground"
-                  >
-                    <span className="mt-1.5 h-1 w-1 rounded-full bg-status-completed" />
-                    {rec}
+                {analysis.potential_bugs.map((bug, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-foreground">
+                    <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-status-failed" />
+                    {bug}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {analysis.security_concerns.length > 0 && (
+            <div>
+              <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Security Concerns
+              </h5>
+              <ul className="mt-1 space-y-1">
+                {analysis.security_concerns.map((concern, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-foreground">
+                    <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-risk-high" />
+                    {concern}
                   </li>
                 ))}
               </ul>
@@ -165,33 +133,25 @@ function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
   );
 }
 
-export const statusDotColorMap: Record<string, string> = {
-  pending: "bg-yellow-500",          // #eab308
-  processing: "bg-blue-500",         // #3b82f6
-  completed: "bg-green-500",         // #22c55e
-  failed: "bg-red-500",              // #ef4444
-  insights: "bg-indigo-500",         // #6366F1
-  recommendations: "bg-emerald-500", // #10B981
-  risk_high: "bg-red-300"//#f97316
-};
-
 function IssueSection({
   title,
   icon: Icon,
   issues,
-  color,
+  iconClassName,
+  dotClassName,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   issues: string[];
-  color: string;
+  iconClassName: string;
+  dotClassName: string;
 }) {
-  if (issues.length === 0) return null;
-  console.log(`color: ${color}`)
+  if (!issues || issues.length === 0) return null;
+
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2">
-        <Icon className={cn("h-5 w-5", statusDotColorMap[color])} />
+        <Icon className={cn("h-5 w-5", iconClassName)} />
         <h3 className="font-medium text-foreground">{title}</h3>
         <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
           {issues.length}
@@ -200,7 +160,7 @@ function IssueSection({
       <ul className="mt-3 space-y-2">
         {issues.map((issue, i) => (
           <li key={i} className="flex items-start gap-2 text-sm text-foreground">
-            <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", statusDotColorMap[color])} />
+            <span className={cn("mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full", dotClassName)} />
             {issue}
           </li>
         ))}
@@ -219,10 +179,12 @@ export default function JobDetailPage({
   const { data: result, isLoading, error } = useSWR<AnalysisResult>(
     `/api/result/${id}`,
     fetcher,
-    { refreshInterval: (data?: AnalysisResult) => data?.status === "processing" ? 3000 : 0 }
+    {
+      refreshInterval: (data?: AnalysisResult) =>
+        data?.status === "processing" || data?.status === "pending" ? 3000 : 0,
+    }
   );
 
-  console.log(`result: ${JSON.stringify(result)}`)
   if (isLoading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -236,17 +198,19 @@ export default function JobDetailPage({
       <div className="flex h-64 flex-col items-center justify-center text-center">
         <p className="text-lg font-medium text-foreground">Job not found</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          {error ? `Error: ${(error as any)?.message}` : "The requested job could not be found."}
+          {error
+            ? `Error: ${(error as any)?.message}`
+            : "The requested job could not be found."}
         </p>
-        <Link
-          href="/jobs"
-          className="mt-4 text-sm text-ring hover:underline"
-        >
+        <Link href="/jobs" className="mt-4 text-sm text-ring hover:underline">
           Back to jobs
         </Link>
       </div>
     );
   }
+
+  const isTerminal = result.status === "completed" || result.status === "failed";
+  const riskLevel = result.risk_level ?? result.overall_risk;
 
   return (
     <div className="space-y-6">
@@ -261,30 +225,29 @@ export default function JobDetailPage({
             Back to jobs
           </Link>
           <h1 className="mt-2 text-2xl font-semibold text-foreground">
-            {result.owner}/{result.repo} #{result.pr_number}
+            {result.owner && result.repo
+              ? `${result.owner}/${result.repo} #${result.pr_number}`
+              : result.job_id}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Job ID: {result.job_id}
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">Job ID: {result.job_id}</p>
         </div>
 
         <div className="flex items-center gap-3">
           <JobStatusBadge status={result.status} />
-          {result.overall_risk && <RiskBadge level={result.overall_risk} />}
-          <a
-            href={`https://github.com/${result.owner}/${result.repo}/pull/${result.pr_number}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 rounded-md bg-secondary px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary/80"
-          >
-            <ExternalLink className="h-4 w-4" />
-            View PR
-          </a>
+          {riskLevel && <RiskBadge level={riskLevel} />}
+          {result.owner && result.repo && result.pr_number && (
+            <a
+              href={`https://github.com/${result.owner}/${result.repo}/pull/${result.pr_number}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 rounded-md bg-secondary px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary/80"
+            >
+              <ExternalLink className="h-4 w-4" />
+              View PR
+            </a>
+          )}
         </div>
       </div>
-      {/* console.log(`time completed: ${(new Date(result.completed_at).getTime())}`) */}
-      {/* console.log(`time completed: ${(new Date(result.created_at).getTime())}`) */}
-      {/* console.log(`result: ${result}`) */}
 
       {/* Meta Info */}
       <div className="grid gap-4 sm:grid-cols-4">
@@ -294,14 +257,9 @@ export default function JobDetailPage({
             <span className="text-sm">Duration</span>
           </div>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.completed_at
-              ? `${Math.round(
-                  (new Date(result.completed_at).getTime() -
-                    new Date(result.created_at).getTime()) /
-                    1000
-                )}s`
-              : result.status == 'failed' ? 'NA'
-              : "In progress..."}
+            {isTerminal
+              ? safeDurationSeconds(result.created_at, result.completed_at)
+              : "In progress…"}
           </p>
         </div>
 
@@ -311,42 +269,45 @@ export default function JobDetailPage({
             <span className="text-sm">Cache Performance</span>
           </div>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {!!result.cache_hits && (
-              <>
-                {result.cache_hits}/{result.cache_hits + result.cache_misses} hits
-              </>)}
-            {(!result.cache_hits) && (
-              <>
-                NA
-              </>)}
+            {result.cache_hits != null && result.cache_misses != null
+              ? `${result.cache_hits}/${result.cache_hits + result.cache_misses} hits`
+              : "—"}
           </p>
         </div>
 
         <div className="rounded-lg border border-border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="text-sm">Files Analyzed</span>
-          </div>
+          <p className="text-sm text-muted-foreground">Files Analyzed</p>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.files_analyzed ?? 'NA'}
+            {result.files_analyzed ?? "—"}
           </p>
         </div>
 
         <div className="rounded-lg border border-border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="text-sm">Risk Score</span>
-          </div>
+          <p className="text-sm text-muted-foreground">Risk Score</p>
           <p className="mt-1 text-lg font-medium text-foreground">
-            {result.risk_score ?? '0'}/100
+            {result.risk_score != null ? `${result.risk_score}/100` : "—"}
           </p>
         </div>
       </div>
 
+      {/* Skipped / failed notice */}
+      {result.skipped_reason && (
+        <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">Skipped: </span>
+          {result.skipped_reason}
+        </div>
+      )}
+      {result.error && (
+        <div className="rounded-lg border border-status-failed/30 bg-status-failed/10 p-4 text-sm text-status-failed">
+          <span className="font-medium">Error: </span>
+          {result.error}
+        </div>
+      )}
+
       {/* Summary */}
       {result.headline && (
         <div className="rounded-lg border border-border bg-card p-6">
-          <h2 className="text-lg font-semibold text-foreground">
-            {result.headline}
-          </h2>
+          <h2 className="text-lg font-semibold text-foreground">{result.headline}</h2>
           {result.summary && (
             <p className="mt-2 text-muted-foreground">{result.summary}</p>
           )}
@@ -359,36 +320,41 @@ export default function JobDetailPage({
           title="Insights"
           icon={Lightbulb}
           issues={result.insights}
-          color="insights"
+          iconClassName="text-indigo-400"
+          dotClassName="bg-indigo-400"
         />
         <IssueSection
           title="Recommendations"
           icon={Sparkles}
           issues={result.recommendations}
-          color="recommendations"
+          iconClassName="text-emerald-400"
+          dotClassName="bg-emerald-400"
         />
         <IssueSection
           title="Memory Safety"
           icon={AlertTriangle}
           issues={result.memory_safety_issues}
-          color="failed"
+          iconClassName="text-status-failed"
+          dotClassName="bg-status-failed"
         />
         <IssueSection
           title="Security Concerns"
           icon={Shield}
           issues={result.security_concerns}
-          color="risk_high"
+          iconClassName="text-orange-400"
+          dotClassName="bg-orange-400"
         />
         <IssueSection
           title="Potential Bugs"
           icon={Bug}
           issues={result.potential_bugs}
-          color="pending"
+          iconClassName="text-status-pending"
+          dotClassName="bg-status-pending"
         />
       </div>
 
       {/* Function Analyses */}
-      {result.function_analyses.length > 0 && (
+      {result.function_analyses && result.function_analyses.length > 0 && (
         <div>
           <h2 className="mb-4 text-lg font-semibold text-foreground">
             Function Analysis ({result.function_analyses.length})
