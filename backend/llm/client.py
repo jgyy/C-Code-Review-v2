@@ -275,7 +275,7 @@ class GeminiClient:
                         config=types.GenerateContentConfig(
                             system_instruction=system_prompt,
                             temperature=0.2,
-                            max_output_tokens=4096,
+                            max_output_tokens=16384,
                             response_mime_type="application/json",
                         ),
                     )
@@ -574,11 +574,88 @@ class GeminiClient:
     # Response parsing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _recover_truncated_json(raw: str) -> str:
+        """
+        Best-effort recovery for JSON truncated mid-stream by a token limit.
+
+        Walks the string character-by-character to track open braces/brackets
+        and whether we are inside a string literal. If the response was cut off
+        mid-string, the incomplete string is removed back to the last safe
+        delimiter. Open structures are then closed in reverse order so the
+        result is at least syntactically valid JSON, preserving every field
+        that was fully written before truncation.
+
+        Returns the original string unchanged if it already parses cleanly.
+        Raises ValueError if recovery still produces invalid JSON.
+        """
+        # Fast path — already valid
+        try:
+            json.loads(raw)
+            return raw
+        except json.JSONDecodeError:
+            pass
+
+        s = raw.rstrip()
+        stack: list[str] = []
+        in_string = False
+        escape_next = False
+
+        for ch in s:
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ("{", "["):
+                stack.append(ch)
+            elif ch in ("}", "]") and stack:
+                stack.pop()
+
+        if not stack and not in_string:
+            # Balanced but still invalid — nothing recoverable
+            raise ValueError("JSON structure is balanced but still unparseable")
+
+        # If we ended inside a string literal, cut back to the opening quote
+        # and strip any trailing comma so the enclosing object/array stays valid
+        if in_string:
+            last_quote = s.rfind('"')
+            if last_quote > 0:
+                s = s[:last_quote].rstrip().rstrip(",").rstrip()
+
+        # Close any open structures
+        closers = {"[": "]", "{": "}"}
+        s = s + "".join(closers[c] for c in reversed(stack))
+
+        json.loads(s)  # raises ValueError/JSONDecodeError if still broken
+        return s
+
     def _parse_pr_analysis(
         self, response: str, triage_result: TriageResult
     ) -> PRAnalysis:
         try:
-            data = json.loads(response)
+            try:
+                recovered = self._recover_truncated_json(response)
+            except Exception as recover_err:
+                logger.warning(
+                    f"Gemini response could not be recovered as JSON: {recover_err}. "
+                    f"Response length={len(response)}. Falling back to triage."
+                )
+                return self._fallback_analysis_from_triage(triage_result)
+
+            if recovered != response:
+                logger.warning(
+                    "Gemini response was truncated (hit token limit); recovered partial JSON. "
+                    f"Original length={len(response)}, recovered length={len(recovered)}"
+                )
+
+            data = json.loads(recovered)
             risk_level_str = data.get("risk_level", "medium").lower()
             risk_level = (
                 RiskLevel(risk_level_str)
