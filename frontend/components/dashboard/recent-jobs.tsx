@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, isValid } from "date-fns";
 import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 import { RiskBadge } from "@/components/jobs/risk-badge";
 import { GitPullRequest, ArrowRight } from "lucide-react";
@@ -9,6 +9,13 @@ import type { JobStatus, AnalysisResult } from "@/lib/api";
 
 interface RecentJobsProps {
   jobs: (JobStatus & Partial<AnalysisResult>)[];
+}
+
+function safeFormatDistance(dateStr?: string): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (!isValid(d) || d.getFullYear() < 2020) return "—";
+  return formatDistanceToNow(d, { addSuffix: true });
 }
 
 export function RecentJobs({ jobs }: RecentJobsProps) {
@@ -40,34 +47,47 @@ export function RecentJobs({ jobs }: RecentJobsProps) {
           <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
-      
+
       <div className="divide-y divide-border">
-        {jobs.slice(0, 5).map((job) => (
-          <Link
-            key={job.job_id}
-            href={`/jobs/${job.job_id}`}
-            className="flex items-center justify-between px-6 py-4 transition-colors hover:bg-secondary/30"
-          >
-            <div className="flex items-center gap-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary">
-                <GitPullRequest className="h-5 w-5 text-muted-foreground" />
+        {jobs.slice(0, 5).map((job) => {
+          const owner = job.owner;
+          const repo = job.repo;
+          const prNumber = job.pr_number;
+          const hasRepoInfo = owner && repo;
+
+          return (
+            <Link
+              key={job.job_id}
+              href={`/jobs/${job.job_id}`}
+              className="flex items-center justify-between px-6 py-4 transition-colors hover:bg-secondary/30"
+            >
+              <div className="flex items-center gap-4">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-secondary">
+                  <GitPullRequest className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div>
+                  {hasRepoInfo ? (
+                    <p className="font-medium text-foreground">
+                      {owner}/{repo} #{prNumber}
+                    </p>
+                  ) : (
+                    <p className="font-mono text-xs text-muted-foreground">
+                      {job.job_id}
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">
+                    {safeFormatDistance(job.created_at)}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="font-medium text-foreground">
-                  {job.owner}/{job.repo} #{job.pr_number}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
-                </p>
+
+              <div className="flex items-center gap-3">
+                {job.overall_risk && <RiskBadge level={job.overall_risk} size="sm" />}
+                <JobStatusBadge status={job.status} size="sm" />
               </div>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              {job.overall_risk && <RiskBadge level={job.overall_risk} size="sm" />}
-              <JobStatusBadge status={job.status} size="sm" />
-            </div>
-          </Link>
-        ))}
+            </Link>
+          );
+        })}
       </div>
     </div>
   );

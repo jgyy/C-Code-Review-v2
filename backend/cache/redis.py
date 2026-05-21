@@ -21,6 +21,8 @@ from dataclasses import asdict
 import logging
 from dotenv import load_dotenv
 
+from datetime import datetime, timezone
+
 from upstash_redis.asyncio import Redis
 
 load_dotenv()
@@ -137,6 +139,7 @@ async def enqueue_job(job_id: str, job_data: dict) -> bool:
         await rc.set(f"job:{job_id}", json.dumps({
             **job_data,
             "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }), ex=JOB_TTL)
         
         # Add to queue
@@ -189,6 +192,10 @@ async def update_job_status(job_id: str, status: str, result: Optional[dict] = N
         else:
             data = {"job_id": job_id}
         data["status"] = status
+        if status == "processing" and "started_at" not in data:
+            data["started_at"] = datetime.now(timezone.utc).isoformat()
+        if status in ("completed", "failed") and "completed_at" not in data:
+            data["completed_at"] = datetime.now(timezone.utc).isoformat()
         await rc.set(f"job:{job_id}", json.dumps(data), ex=JOB_TTL)
         
         # Store result if provided

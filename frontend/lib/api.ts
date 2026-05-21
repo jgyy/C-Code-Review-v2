@@ -11,70 +11,79 @@ export interface AnalyzeRequest {
 export interface JobStatus {
   job_id: string;
   status: "pending" | "processing" | "completed" | "failed";
-  created_at: string;
+  // These come from the job metadata stored at enqueue time
+  owner?: string;
+  repo?: string;
+  pr_number?: number;
+  // Timestamps — optional because the backend doesn't always write them
+  created_at?: string;
   started_at?: string;
   completed_at?: string;
   error?: string;
-  progress?: {
-    files_processed: number;
-    total_files: number;
-    current_file?: string;
-  };
+  skipped_reason?: string;
+  files_analyzed?: number;
+  functions_analyzed?: number;
+  cache_hits?: number;
+  cache_misses?: number;
 }
 
+// Matches llm/schemas.py FunctionAnalysisOutput exactly
 export interface FunctionAnalysis {
   name: string;
   risk_level: "low" | "medium" | "high" | "critical";
-  summary: string;
-  issues: string[];
-  recommendations: string[];
-  line_start?: number;
-  line_end?: number;
+  risk_signals: string[];
+  suggestion?: string;
+  potential_bugs: string[];
+  security_concerns: string[];
 }
 
 export interface AnalysisResult {
   job_id: string;
-  owner: string;
-  repo: string;
-  pr_number: number;
+  owner?: string;
+  repo?: string;
+  pr_number?: number;
   status: "pending" | "processing" | "completed" | "failed";
-  created_at: string;
-  completed_at: string;
-  
-  // Triage info
-  triage_decision: "skip" | "fast_path" | "deep_analysis";
-  risk_score: number;
-  
+
+  // Timestamps — optional; backend doesn't always persist these
+  created_at?: string;
+  completed_at?: string;
+
+  // Risk
+  risk_score?: number;
+  risk_level?: "low" | "medium" | "high" | "critical";
+  // Backend returns overall_risk as risk_level in AnalysisResultResponse
+  overall_risk?: "low" | "medium" | "high" | "critical";
+
   // Analysis results
   headline?: string;
   summary?: string;
-  overall_risk: "low" | "medium" | "high" | "critical";
-  
+
   // Per-file results
-  files_analyzed: number;
-  cache_hits: number;
-  cache_misses: number;
-  
+  files_analyzed?: number;
+  cache_hits?: number;
+  cache_misses?: number;
+
   // Function-level analysis
   function_analyses: FunctionAnalysis[];
-  
+
   // Grouped issues
   insights: string[];
   recommendations: string[];
   memory_safety_issues: string[];
   security_concerns: string[];
   potential_bugs: string[];
-  
+
+  // For skipped jobs
+  skipped_reason?: string;
+
   // Error info if failed
   error?: string;
 }
 
 export interface CacheStats {
-  total_entries: number;
-  memory_usage_bytes: number;
-  hit_count: number;
-  miss_count: number;
-  hit_rate: number;
+  status: string;
+  total_keys?: number;
+  error?: string;
 }
 
 export interface HealthStatus {
@@ -97,11 +106,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   let accessToken: string | undefined
 
   if (typeof window === "undefined") {
-    // Server-side: use getServerSession with authOptions
     const session = await getServerSession(authOptions)
     accessToken = session?.accessToken
   } else {
-    // Client-side
     const session = await getSession()
     accessToken = session?.accessToken
   }
@@ -128,13 +135,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 export const api = {
   analyze: (data: AnalyzeRequest) =>
     request<{ job_id: string }>("/api/analyze", { method: "POST", body: JSON.stringify(data) }),
-  getStatus: (jobId: string) => request<JobStatus>(`/status/${jobId}`),
-  getResult: (jobId: string) => request<AnalysisResult>(`/result/${jobId}`),
-  getCacheStats: () => request<CacheStats>("/cache/stats"),
-  clearCache: () => request<{ cleared: number }>("/cache/clear", { method: "POST" }),
+  // Backend router is mounted at /api in main.py, so all routes need /api/ prefix
+  getStatus: (jobId: string) => request<JobStatus>(`/api/status/${jobId}`),
+  getResult: (jobId: string) => request<AnalysisResult>(`/api/result/${jobId}`),
+  getCacheStats: () => request<CacheStats>("/api/cache/stats"),
+  clearCache: () => request<{ cleared: number }>("/api/cache/clear", { method: "POST" }),
   health: () => request<HealthStatus>("/health"),
   listJobs: (limit = 50, offset = 0) =>
-    request<{ jobs: JobStatus[]; total: number }>(`/jobs?limit=${limit}&offset=${offset}`),
+    request<{ jobs: JobStatus[]; total: number }>(`/api/jobs?limit=${limit}&offset=${offset}`),
 }
 
 export const fetcher = <T>(endpoint: string): Promise<T> => request<T>(endpoint)
