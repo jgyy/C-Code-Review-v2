@@ -82,7 +82,7 @@ export function RecentJobs({ jobs }: RecentJobsProps) {
               </div>
 
               <div className="flex items-center gap-3">
-                {job.overall_risk && <RiskBadge level={job.overall_risk} size="sm" />}
+                {(job.risk_level || job.overall_risk) && <RiskBadge level={(job.risk_level || job.overall_risk)!} size="sm" />}
                 <JobStatusBadge status={job.status} size="sm" />
               </div>
             </Link>

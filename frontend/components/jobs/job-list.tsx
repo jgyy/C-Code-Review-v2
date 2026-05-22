@@ -65,15 +65,18 @@ export function JobList({ jobs }: JobListProps) {
               key={job.job_id}
               className="grid grid-cols-12 items-center gap-4 px-6 py-4 transition-colors hover:bg-secondary/30"
             >
-              {/* Repository / PR */}
-              <div className="col-span-4 flex items-center gap-3">
+              {/* Repository / PR — entire cell is a link */}
+              <Link
+                href={`/jobs/${job.job_id}`}
+                className="col-span-4 flex items-center gap-3 min-w-0"
+              >
                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-secondary">
                   <GitPullRequest className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <div className="min-w-0">
                   {hasRepoInfo ? (
                     <>
-                      <p className="truncate font-medium text-foreground">
+                      <p className="truncate font-medium text-foreground hover:underline">
                         {owner}/{repo}
                       </p>
                       <p className="text-sm text-muted-foreground">
@@ -81,12 +84,12 @@ export function JobList({ jobs }: JobListProps) {
                       </p>
                     </>
                   ) : (
-                    <p className="truncate font-mono text-xs text-muted-foreground">
+                    <p className="truncate font-mono text-xs text-muted-foreground hover:underline">
                       {job.job_id}
                     </p>
                   )}
                 </div>
-              </div>
+              </Link>
 
               {/* Status */}
               <div className="col-span-2">
@@ -95,8 +98,8 @@ export function JobList({ jobs }: JobListProps) {
 
               {/* Risk */}
               <div className="col-span-2">
-                {job.overall_risk ? (
-                  <RiskBadge level={job.overall_risk} size="sm" />
+                {(job.risk_level || job.overall_risk) ? (
+                  <RiskBadge level={(job.risk_level || job.overall_risk)!} size="sm" />
                 ) : (
                   <span className="text-sm text-muted-foreground">—</span>
                 )}

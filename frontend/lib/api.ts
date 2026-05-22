@@ -11,11 +11,13 @@ export interface AnalyzeRequest {
 export interface JobStatus {
   job_id: string;
   status: "pending" | "processing" | "completed" | "failed";
-  // These come from the job metadata stored at enqueue time
+  // Job metadata stored at enqueue time
   owner?: string;
   repo?: string;
   pr_number?: number;
-  // Timestamps — optional because the backend doesn't always write them
+  // Risk level stored when job completes
+  risk_level?: "low" | "medium" | "high" | "critical";
+  // Timestamps
   created_at?: string;
   started_at?: string;
   completed_at?: string;
@@ -27,14 +29,14 @@ export interface JobStatus {
   cache_misses?: number;
 }
 
-// Matches llm/schemas.py FunctionAnalysisOutput exactly
+// Matches backend FunctionAnalysisOutput (llm/schemas.py)
 export interface FunctionAnalysis {
   name: string;
   risk_level: "low" | "medium" | "high" | "critical";
-  risk_signals: string[];
+  risk_signals?: string[];
   suggestion?: string;
-  potential_bugs: string[];
-  security_concerns: string[];
+  potential_bugs?: string[];
+  security_concerns?: string[];
 }
 
 export interface AnalysisResult {

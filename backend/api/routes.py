@@ -221,6 +221,8 @@ async def get_analysis_result(job_id: str):
         repo=job_data.get("repo"),
         pr_number=job_data.get("pr_number"),
         status=status,
+        created_at=job_data.get("created_at"),
+        completed_at=job_data.get("completed_at"),
         files_analyzed=files_analyzed,
         cache_hits=cache_hits,
         cache_misses=cache_misses,
@@ -275,6 +277,10 @@ async def list_jobs_endpoint(limit: int = 20, offset: int = 0):
         jobs.append(JobStatusResponse(
             job_id=job_id,
             status=status,
+            owner=job_data.get("owner"),
+            repo=job_data.get("repo"),
+            pr_number=job_data.get("pr_number"),
+            risk_level=job_data.get("risk_level"),
             files_analyzed=job_data.get("files_analyzed"),
             functions_analyzed=job_data.get("functions_analyzed"),
             cache_hits=job_data.get("cache_hits"),
@@ -282,6 +288,7 @@ async def list_jobs_endpoint(limit: int = 20, offset: int = 0):
             skipped_reason=job_data.get("skipped_reason"),
             error=job_data.get("error"),
             created_at=job_data.get("created_at"),
+            completed_at=job_data.get("completed_at"),
             updated_at=job_data.get("updated_at"),
         ))
 

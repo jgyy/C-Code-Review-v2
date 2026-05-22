@@ -178,19 +178,29 @@ class GeminiClient:
             all_function_results[name] = fa
             logger.info(f"Cache hit for function analysis: {name}")
 
-        # If all selected functions were cached, skip the LLM call entirely
-        if not uncached_selected:
-            logger.info("All selected functions served from cache — skipping LLM call")
-            return self._build_pr_analysis(
-                pr_evidence, triage_result, list(all_function_results.values())
-            )
+        # Build the PR-level cache key from the selected function names + scores.
+        # This key is stable across re-runs of the same PR as long as triage picks
+        # the same top-N (which it does deterministically for identical code).
+        pr_cache_key = self._pr_summary_cache_key(triage_result)
 
-        # Build prompt with uncached functions only
+        # If all selected functions were cached, try to restore the PR-level summary too
+        if not uncached_selected:
+            logger.info("All selected functions served from cache — checking PR summary cache")
+            cached_pr = await self._get_pr_summary_cache(pr_cache_key)
+            if cached_pr:
+                logger.info("PR summary cache hit — skipping LLM call entirely")
+                cached_pr.function_analyses = list(all_function_results.values())
+                return cached_pr
+            # Function results are cached but no PR summary yet — still call LLM
+            logger.info("PR summary cache miss — calling LLM for summary (functions already cached)")
+
+        # Build prompt with uncached functions only (or all if PR summary was missing)
+        functions_for_prompt = uncached_selected if uncached_selected else list(triage_result.llm_selected_functions)
         context = self._build_context(
             pr_evidence=pr_evidence,
             triage_result=triage_result,
             file_asts=file_asts,
-            selected_functions=uncached_selected,
+            selected_functions=functions_for_prompt,
         )
         user_prompt = build_fast_path_prompt(context)
 
@@ -206,13 +216,17 @@ class GeminiClient:
             for fa in pr_analysis.function_analyses:
                 all_function_results[fa.name] = fa
 
-            # Cache the freshly computed LLM results
+            # Cache per-function LLM results (only for newly computed ones)
             await self._cache_function_results(
-                pr_analysis.function_analyses, uncached_selected, file_asts
+                pr_analysis.function_analyses, functions_for_prompt, file_asts
             )
 
             # Attach the full function list (LLM + static) to the PR analysis
             pr_analysis.function_analyses = list(all_function_results.values())
+
+            # Cache the PR-level summary so re-runs skip the LLM call entirely
+            await self._set_pr_summary_cache(pr_cache_key, pr_analysis)
+
             return pr_analysis
 
         except Exception as e:
@@ -542,6 +556,74 @@ class GeminiClient:
                 )
             except Exception as e:
                 logger.warning(f"Failed to cache function analysis for {fa.name}: {e}")
+
+    # ------------------------------------------------------------------
+    # PR-level summary caching
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pr_summary_cache_key(triage_result) -> str:
+        """
+        Cache key for the PR-level LLM summary.
+        Keyed on the sorted list of selected function names and their risk scores
+        so it's stable across re-runs of the same PR with the same triage output.
+        """
+        fingerprint = "|".join(
+            f"{fr.name}:{fr.risk_score}"
+            for fr in sorted(triage_result.llm_selected_functions, key=lambda f: f.name)
+        )
+        return "llm_pr:" + hashlib.sha256(fingerprint.encode()).hexdigest()[:24]
+
+    async def _get_pr_summary_cache(self, key: str) -> "PRAnalysis | None":
+        """Retrieve a cached PR-level summary (without function_analyses)."""
+        rc = _get_redis()
+        if not rc:
+            return None
+        try:
+            data = await rc.get(key)
+            if not data:
+                return None
+            parsed = json.loads(data) if isinstance(data, str) else data
+            risk_level_str = parsed.get("risk_level", "medium")
+            return PRAnalysis(
+                headline=parsed.get("headline", ""),
+                risk_level=RiskLevel(risk_level_str)
+                if risk_level_str in [r.value for r in RiskLevel]
+                else RiskLevel.MEDIUM,
+                risk_score=parsed.get("risk_score", 0),
+                summary=parsed.get("summary"),
+                insights=parsed.get("insights", []),
+                recommendations=parsed.get("recommendations", []),
+                memory_safety_issues=parsed.get("memory_safety_issues", []),
+                security_concerns=parsed.get("security_concerns", []),
+                potential_bugs=parsed.get("potential_bugs", []),
+                cross_function_concerns=parsed.get("cross_function_concerns", []),
+            )
+        except Exception as e:
+            logger.warning(f"PR summary cache get failed: {e}")
+            return None
+
+    async def _set_pr_summary_cache(self, key: str, analysis: "PRAnalysis") -> None:
+        """Store the PR-level summary (without function_analyses to save space)."""
+        rc = _get_redis()
+        if not rc:
+            return
+        try:
+            payload = {
+                "headline": analysis.headline,
+                "risk_level": analysis.risk_level.value if hasattr(analysis.risk_level, "value") else analysis.risk_level,
+                "risk_score": analysis.risk_score,
+                "summary": analysis.summary,
+                "insights": analysis.insights,
+                "recommendations": analysis.recommendations,
+                "memory_safety_issues": analysis.memory_safety_issues,
+                "security_concerns": analysis.security_concerns,
+                "potential_bugs": analysis.potential_bugs,
+                "cross_function_concerns": analysis.cross_function_concerns,
+            }
+            await rc.set(key, json.dumps(payload), ex=LLM_CACHE_TTL)
+        except Exception as e:
+            logger.warning(f"PR summary cache set failed: {e}")
 
     # ------------------------------------------------------------------
     # Static results for non-LLM functions

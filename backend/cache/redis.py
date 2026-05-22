@@ -176,7 +176,7 @@ async def dequeue_job() -> Optional[tuple[str, dict]]:
     return None
 
 
-async def update_job_status(job_id: str, status: str, result: Optional[dict] = None) -> bool:
+async def update_job_status(job_id: str, status: str, result: Optional[dict] = None, risk_level: Optional[str] = None) -> bool:
     """Update job status and optionally store result."""
     rc = _get_redis()
     if not rc:
@@ -196,6 +196,8 @@ async def update_job_status(job_id: str, status: str, result: Optional[dict] = N
             data["started_at"] = datetime.now(timezone.utc).isoformat()
         if status in ("completed", "failed") and "completed_at" not in data:
             data["completed_at"] = datetime.now(timezone.utc).isoformat()
+        if risk_level is not None:
+            data["risk_level"] = risk_level
         await rc.set(f"job:{job_id}", json.dumps(data), ex=JOB_TTL)
         
         # Store result if provided

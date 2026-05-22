@@ -53,20 +53,27 @@ class JobStatusResponse(BaseModel):
     """Response from job status endpoint."""
     job_id: str
     status: JobStatus
-    
+
+    # Job metadata (stored at enqueue time)
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
+
     # Timestamps
     created_at: Optional[str] = None
+    completed_at: Optional[str] = None
     updated_at: Optional[str] = None
-    
+
     # For completed jobs
+    risk_level: Optional[str] = None
     files_analyzed: Optional[int] = None
     functions_analyzed: Optional[int] = None
     cache_hits: Optional[int] = None
     cache_misses: Optional[int] = None
-    
+
     # For skipped jobs
     skipped_reason: Optional[str] = None
-    
+
     # For failed jobs
     error: Optional[str] = None
 
@@ -88,10 +95,10 @@ class AnalysisResultResponse(BaseModel):
     repo: Optional[str] = None
     pr_number: Optional[int] = None
 
-    # PR info
-    repo_full_name: Optional[str] = None
-    pr_number: Optional[int] = None
-    
+    # Timestamps
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
     # Files analysis
     files_analyzed: Optional[int] = None
     cache_hits: Optional[int] = None
@@ -102,12 +109,12 @@ class AnalysisResultResponse(BaseModel):
     risk_level: Optional[str] = None
     risk_score: Optional[int] = None
     summary: Optional[str] = None
-    
+
     # Details
     insights: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     function_analyses: list[FunctionAnalysisSummary] = Field(default_factory=list)
-    
+
     # Issues
     memory_safety_issues: list[str] = Field(default_factory=list)
     security_concerns: list[str] = Field(default_factory=list)
