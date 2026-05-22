@@ -46,11 +46,15 @@ function safeDurationSeconds(createdAt?: string, completedAt?: string): string {
 function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  const riskSignals = analysis.risk_signals ?? [];
+  const potentialBugs = analysis.potential_bugs ?? [];
+  const securityConcerns = analysis.security_concerns ?? [];
+
   const hasDetails =
-    analysis.risk_signals.length > 0 ||
-    analysis.suggestion ||
-    analysis.potential_bugs.length > 0 ||
-    analysis.security_concerns.length > 0;
+    riskSignals.length > 0 ||
+    !!analysis.suggestion ||
+    potentialBugs.length > 0 ||
+    securityConcerns.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-secondary/30">
@@ -80,13 +84,13 @@ function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
             <p className="text-sm text-muted-foreground">{analysis.suggestion}</p>
           )}
 
-          {analysis.risk_signals.length > 0 && (
+          {riskSignals.length > 0 && (
             <div>
               <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Risk Signals
               </h5>
               <ul className="mt-1 space-y-1">
-                {analysis.risk_signals.map((signal, i) => (
+                {riskSignals.map((signal, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-foreground">
                     <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-status-pending" />
                     {signal}
@@ -96,13 +100,13 @@ function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
             </div>
           )}
 
-          {analysis.potential_bugs.length > 0 && (
+          {potentialBugs.length > 0 && (
             <div>
               <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Potential Bugs
               </h5>
               <ul className="mt-1 space-y-1">
-                {analysis.potential_bugs.map((bug, i) => (
+                {potentialBugs.map((bug, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-foreground">
                     <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-status-failed" />
                     {bug}
@@ -112,13 +116,13 @@ function FunctionAnalysisCard({ analysis }: { analysis: FunctionAnalysis }) {
             </div>
           )}
 
-          {analysis.security_concerns.length > 0 && (
+          {securityConcerns.length > 0 && (
             <div>
               <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Security Concerns
               </h5>
               <ul className="mt-1 space-y-1">
-                {analysis.security_concerns.map((concern, i) => (
+                {securityConcerns.map((concern, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-foreground">
                     <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-risk-high" />
                     {concern}
