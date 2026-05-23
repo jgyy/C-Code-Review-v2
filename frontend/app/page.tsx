@@ -36,6 +36,19 @@ export default function DashboardPage() {
         }, 0) / completedWithTimes.length
       : 0;
 
+  // Compute cache hit rate from jobs that have both cache_hits and cache_misses recorded.
+  // The /api/cache/stats endpoint only returns total_keys, not a hit rate, so we derive
+  // it from completed job results which do carry per-job cache_hits/cache_misses.
+  const jobsWithCacheData = jobs.filter(
+    (j) => j.cache_hits != null && j.cache_misses != null
+  );
+  const totalHits = jobsWithCacheData.reduce((s, j) => s + (j.cache_hits ?? 0), 0);
+  const totalRequests = jobsWithCacheData.reduce(
+    (s, j) => s + (j.cache_hits ?? 0) + (j.cache_misses ?? 0),
+    0
+  );
+  const cacheHitRate = totalRequests > 0 ? (totalHits / totalRequests) * 100 : 0;
+
   const stats = {
     totalJobs: jobsData?.total ?? 0,
     successRate:
@@ -43,7 +56,7 @@ export default function DashboardPage() {
         ? (jobs.filter((j) => j.status === "completed").length / jobs.length) * 100
         : 0,
     avgAnalysisTime,
-    cacheHitRate: 0, // CacheStats from backend doesn't include hit_rate; show 0 until backend exposes it
+    cacheHitRate,
   };
 
   const isLoading = cacheLoading || jobsLoading;

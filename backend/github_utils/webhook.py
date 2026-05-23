@@ -176,6 +176,13 @@ async def process_pr_job(
         )
         
         if result.success:
+            risk_level_str = (
+                result.analysis.risk_level.value
+                if result.analysis and hasattr(result.analysis.risk_level, "value")
+                else result.analysis.risk_level
+                if result.analysis
+                else None
+            )
             await update_job_status(job_id, "completed", {
                 "files_analyzed": result.files_analyzed,
                 "functions_analyzed": result.functions_analyzed,
@@ -183,11 +190,11 @@ async def process_pr_job(
                 "cache_misses": result.cache_misses,
                 "skipped_reason": result.skipped_reason,
                 "analysis": result.analysis.model_dump() if result.analysis else None,
-            })
+            }, risk_level=risk_level_str)
             
             # Post comment to PR if we have analysis
             if result.analysis and not result.skipped_reason:
-                comment_body = format_analysis_comment(result.analysis)
+                comment_body = format_analysis_comment(result.analysis, job_id=job_id)
                 await github_client.post_pr_comment(
                     owner=owner,
                     repo=repo_name,
@@ -206,74 +213,84 @@ async def process_pr_job(
         })
 
 
-def format_analysis_comment(analysis) -> str:
-    """Format the analysis result as a GitHub PR comment."""
+def format_analysis_comment(analysis, job_id: str = "") -> str:
+    """Format the analysis result as a GitHub PR comment.
+
+    Keeps the comment short: headline, risk, top-level findings, and a link
+    to the dashboard for full function-level details. Listing all functions in
+    the comment makes it noisy and duplicates what the dashboard already shows.
+    """
     from llm.schemas import PRAnalysis, RiskLevel
-    
+
     if not isinstance(analysis, PRAnalysis):
         return "Analysis completed but no detailed results available."
-    
-    # Risk level emoji/badge
-    risk_badges = {
-        RiskLevel.LOW: "**Low Risk**",
-        RiskLevel.MEDIUM: "**Medium Risk**",
-        RiskLevel.HIGH: "**High Risk**",
-        RiskLevel.CRITICAL: "**CRITICAL RISK**",
+
+    risk_emojis = {
+        RiskLevel.LOW:      "🟢",
+        RiskLevel.MEDIUM:   "🟡",
+        RiskLevel.HIGH:     "🔴",
+        RiskLevel.CRITICAL: "🚨",
     }
-    
-    risk_badge = risk_badges.get(analysis.risk_level, "Unknown Risk")
-    
+    risk_labels = {
+        RiskLevel.LOW:      "Low",
+        RiskLevel.MEDIUM:   "Medium",
+        RiskLevel.HIGH:     "High",
+        RiskLevel.CRITICAL: "Critical",
+    }
+    emoji = risk_emojis.get(analysis.risk_level, "⚪")
+    label = risk_labels.get(analysis.risk_level, "Unknown")
+
+    dashboard_base = os.environ.get("DASHBOARD_URL", "").rstrip("/")
+    job_url = f"{dashboard_base}/jobs/{job_id}" if dashboard_base and job_id else None
+
     lines = [
         "## C Code Review Analysis",
         "",
-        f"### {analysis.headline}",
+        f"{emoji} **{analysis.headline}**",
         "",
-        f"**Risk Level:** {risk_badge} ({analysis.risk_score}/100)",
+        f"| Risk Level | Score |",
+        f"|------------|-------|",
+        f"| {label}    | {analysis.risk_score}/100 |",
         "",
     ]
-    
+
     if analysis.summary:
-        lines.extend([
-            "### Summary",
-            analysis.summary,
-            "",
-        ])
-    
-    if analysis.insights:
-        lines.extend([
-            "### Key Insights",
-            "",
-        ])
-        for insight in analysis.insights:
-            lines.append(f"- {insight}")
+        lines += [analysis.summary, ""]
+
+    if analysis.memory_safety_issues:
+        lines += ["**Memory Safety Issues**", ""]
+        for issue in analysis.memory_safety_issues:
+            lines.append(f"- {issue}")
         lines.append("")
-    
+
+    if analysis.security_concerns:
+        lines += ["**Security Concerns**", ""]
+        for concern in analysis.security_concerns:
+            lines.append(f"- {concern}")
+        lines.append("")
+
+    if analysis.potential_bugs:
+        lines += ["**Potential Bugs**", ""]
+        for bug in analysis.potential_bugs:
+            lines.append(f"- {bug}")
+        lines.append("")
+
     if analysis.recommendations:
-        lines.extend([
-            "### Recommendations",
-            "",
-        ])
-        for rec in analysis.recommendations:
+        lines += ["**Recommendations**", ""]
+        for rec in analysis.recommendations[:5]:
             lines.append(f"- {rec}")
         lines.append("")
-    
-    if analysis.function_analyses:
-        lines.extend([
-            "### Function-Level Analysis",
+
+    if job_url:
+        lines += [
+            f"📊 [**View full analysis on dashboard**]({job_url}) — includes per-function"
+            f" breakdown for all {len(analysis.function_analyses)} functions.",
             "",
-        ])
-        for func in analysis.function_analyses[:5]:  # Limit to top 5
-            lines.append(f"#### `{func.name}`")
-            if func.risk_signals:
-                for signal in func.risk_signals:
-                    lines.append(f"- {signal}")
-            if func.suggestion:
-                lines.append(f"- **Suggestion:** {func.suggestion}")
-            lines.append("")
-    
-    lines.extend([
+        ]
+
+    lines += [
         "---",
         "*Automated analysis by C Code Review Bot*",
-    ])
-    
+    ]
+
     return "\n".join(lines)

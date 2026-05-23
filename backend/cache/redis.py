@@ -33,7 +33,7 @@ redis_client: Optional[Redis] = None
 
 # Cache TTLs
 AST_CACHE_TTL = 86400  # 24 hours
-JOB_TTL = 3600  # 1 hour
+JOB_TTL = 86400  # 1 hour
 RESULT_TTL = 86400 * 7  # 7 days
 
 
