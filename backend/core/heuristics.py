@@ -361,11 +361,13 @@ def compute_function_evidence(match: FunctionMatch, all_callers: dict[str, set[s
         evidence.lines_before = (old.line_end - old.line_start + 1) if old else 0
         evidence.params_before = old.params if old else []
         
-        # Check if this was called by anyone (orphan detection)
+        # Track callers that are now broken (deleted function had live callers).
+        # This is the most dangerous signal for a deletion: callers exist in the
+        # before-AST that call this function, but the function is now gone.
         callers = all_callers.get(match.old_name, set())
         if callers:
             evidence.callers_lost = list(callers)
-        
+
         return evidence
     
     # Modified/Renamed - compare before and after
@@ -463,26 +465,54 @@ def compute_file_evidence(filepath: str, before: FileAST, after: FileAST) -> Fil
         had_parse_errors_after=after.has_parse_errors,
     )
     
-    # Build call graph for orphan detection
-    all_callers: dict[str, set[str]] = {}
+    # Build call graphs for orphan detection and caller tracking.
+    # before_callers: callee -> set of functions that called it in the before-AST.
+    # after_callers:  callee -> set of functions that call it in the after-AST.
+    # Both are needed to compute callers_gained/callers_lost for modified functions
+    # and to detect deletions that leave dangling callers (the most dangerous signal).
+    before_callers: dict[str, set[str]] = {}
     for name, func in before.functions.items():
         for callee in func.calls:
-            if callee not in all_callers:
-                all_callers[callee] = set()
-            all_callers[callee].add(name)
-    
+            before_callers.setdefault(callee, set()).add(name)
+
+    after_callers: dict[str, set[str]] = {}
+    for name, func in after.functions.items():
+        for callee in func.calls:
+            after_callers.setdefault(callee, set()).add(name)
+
     # Match functions
     matches = match_functions(before, after)
-    
+
     for match in matches:
-        func_evidence = compute_function_evidence(match, all_callers)
-        
+        func_evidence = compute_function_evidence(match, before_callers)
+
         # Skip unchanged functions
         if func_evidence.change_type == ChangeType.UNCHANGED:
             continue
-        
+
+        # Refine callers_gained / callers_lost for all change types using both
+        # call graphs.  compute_function_evidence already handles the simple
+        # deletion case; here we add the richer before/after comparison.
+        effective_before_name = match.old_name
+        effective_after_name = match.new_name
+
+        if effective_before_name and effective_after_name:
+            # Modified or renamed: compare caller sets across the two graphs.
+            b_callers = before_callers.get(effective_before_name, set())
+            a_callers = after_callers.get(effective_after_name, set())
+            func_evidence.callers_gained = list(a_callers - b_callers)
+            func_evidence.callers_lost = list(b_callers - a_callers)
+            # A modified function is orphaned if it had callers before and has none now.
+            if b_callers and not a_callers:
+                func_evidence.is_orphan = True
+        elif effective_before_name and not effective_after_name:
+            # Deleted: callers_lost already set by compute_function_evidence.
+            # is_orphan is not meaningful here — the function is gone, but
+            # callers_lost tells us who is now broken.
+            pass
+
         evidence.functions.append(func_evidence)
-        
+
         # Update counts
         if match.change_type == ChangeType.ADDED:
             evidence.functions_added += 1
@@ -492,7 +522,7 @@ def compute_file_evidence(filepath: str, before: FileAST, after: FileAST) -> Fil
             evidence.functions_renamed += 1
         else:
             evidence.functions_modified += 1
-    
+
     return evidence
 
 

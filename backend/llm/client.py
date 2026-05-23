@@ -78,7 +78,132 @@ from llm.schemas import FunctionAnalysisOutput, PRAnalysis
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+
+def build_reverse_call_graph(
+    file_asts: dict[str, tuple[FileAST, FileAST]],
+) -> dict[str, set[str]]:
+    """
+    Build a callee → set-of-callers map from the after-AST of every file.
+
+    Used by _build_context to annotate each LLM-selected function with the
+    chain of functions that call it (up to depth 3), giving the LLM visibility
+    into the blast radius of changes to that function.
+    """
+    reverse: dict[str, set[str]] = {}
+    for _, (_, after_ast) in file_asts.items():
+        for caller_name, func_info in after_ast.functions.items():
+            for callee in func_info.calls:
+                reverse.setdefault(callee, set()).add(caller_name)
+    return reverse
+
+
+def _walk_callers(
+    func_name: str,
+    reverse_graph: dict[str, set[str]],
+    max_depth: int = 3,
+) -> list[str]:
+    """
+    BFS upward through the reverse call graph to find the caller chain.
+
+    Returns a flat list of caller names reachable within max_depth steps,
+    ordered BFS level by level (immediate callers first).  Cycles are
+    handled by a visited set so we never loop.
+    """
+    visited: set[str] = {func_name}
+    frontier: set[str] = {func_name}
+    result: list[str] = []
+    for _ in range(max_depth):
+        next_frontier: set[str] = set()
+        for node in frontier:
+            for caller in reverse_graph.get(node, set()):
+                if caller not in visited:
+                    visited.add(caller)
+                    next_frontier.add(caller)
+                    result.append(caller)
+        frontier = next_frontier
+        if not frontier:
+            break
+    return result
+
+def find_top_feature_entry_point(
+    file_asts: dict[str, tuple[FileAST, FileAST]],
+    changed_function_names: set[str],
+    top_n: int = 3,
+) -> list[tuple[str, int, float]]:
+    """
+    Identify the most likely "feature entry point" added or modified by this PR.
+
+    Strategy:
+    1. Build a forward call graph from the after-AST of all files.
+    2. Find root functions — those with zero in-degree in the call graph
+       (no other function in the AST calls them).  These are the externally
+       visible entry points.
+    3. From each root, DFS to find the maximum reachable call depth and the
+       fraction of reachable nodes that are in `changed_function_names`.
+    4. Score = depth × fraction_changed.  Higher score → better proxy for
+       "this is the root of the new feature."
+
+    Returns up to top_n results as (func_name, max_depth, fraction_changed),
+    sorted by score descending.
+
+    An empty list is returned if there are no changed functions or no roots
+    can be identified (e.g. every function is called by another — a fully
+    internal refactor with no new entry points).
+    """
+    if not changed_function_names:
+        return []
+
+    # Build forward call graph: caller → set of callees (after-AST only)
+    forward: dict[str, set[str]] = {}
+    all_functions: set[str] = set()
+    for _, (_, after_ast) in file_asts.items():
+        for name, func_info in after_ast.functions.items():
+            all_functions.add(name)
+            forward.setdefault(name, set()).update(func_info.calls)
+
+    # in-degree: how many functions in the after-AST call each function
+    in_degree: dict[str, int] = {name: 0 for name in all_functions}
+    for caller, callees in forward.items():
+        for callee in callees:
+            if callee in in_degree:
+                in_degree[callee] += 1
+
+    roots = {name for name, deg in in_degree.items() if deg == 0}
+    # Only consider roots that are themselves changed or reach changed functions
+    if not roots:
+        return []
+
+    def dfs_stats(start: str) -> tuple[int, int]:
+        """Return (max_depth, count_of_changed_reachable_nodes) from start."""
+        visited: set[str] = set()
+        max_depth_found = [0]
+        changed_count = [0]
+
+        def _dfs(node: str, depth: int) -> None:
+            if node in visited:
+                return
+            visited.add(node)
+            if depth > max_depth_found[0]:
+                max_depth_found[0] = depth
+            if node in changed_function_names:
+                changed_count[0] += 1
+            for callee in forward.get(node, set()):
+                _dfs(callee, depth + 1)
+
+        _dfs(start, 0)
+        return max_depth_found[0], changed_count[0]
+
+    scored: list[tuple[str, int, float]] = []
+    for root in roots:
+        depth, n_changed = dfs_stats(root)
+        reachable_total = depth + 1  # rough proxy; avoids a second traversal
+        fraction = n_changed / max(reachable_total, 1)
+        score = depth * fraction
+        if score > 0:  # skip roots with no changed descendants
+            scored.append((root, depth, fraction))
+
+    scored.sort(key=lambda x: x[1] * x[2], reverse=True)
+    return scored[:top_n]
 
 # ---------------------------------------------------------------------------
 # Retry / rate-limit constants
@@ -359,6 +484,17 @@ class GeminiClient:
             for func_ev in file_ev.functions
         }
 
+        # Reverse call graph for caller-chain annotation (fix 2)
+        reverse_graph = build_reverse_call_graph(file_asts)
+
+        # Top feature entry points (fix 4)
+        changed_names: set[str] = {
+            func_ev.name
+            for file_ev in pr_evidence.files
+            for func_ev in file_ev.functions
+        }
+        top_features = find_top_feature_entry_point(file_asts, changed_names)
+
         # Cap evidence rows sent to the prompt
         capped = selected_functions[:MAX_EVIDENCE_FOR_FAST_PATH]
 
@@ -382,6 +518,10 @@ class GeminiClient:
                 "return_type_changed": func_ev.return_type_changed,
                 "calls_added": func_ev.calls_added,
                 "calls_removed": func_ev.calls_removed,
+                "callers_lost": func_ev.callers_lost,   # fix 3b
+                "caller_chain": _walk_callers(           # fix 2
+                    func_ev.name, reverse_graph, max_depth=3
+                ),
                 "risk_score": func_risk.risk_score,
                 "risk_signals": func_risk.signals,
             }
@@ -395,6 +535,37 @@ class GeminiClient:
                 snippet = self._get_snippet(func_ev, before_ast, after_ast)
                 if snippet:
                     code_snippets[func_ev.name] = snippet
+
+        # Callee snippets: for each selected function, include source of callees
+        # that also exist in the AST but aren't already in code_snippets.
+        # This gives the LLM the full context of what a newly-added call does,
+        # not just that the call was added.
+        # Budget: max 5 callee snippets total, prioritised by the risk score of
+        # the calling function (highest-risk function's callees first).
+        MAX_CALLEE_SNIPPETS = 5
+        callee_snippets: dict[str, str] = {}
+        for func_risk in capped:
+            if len(callee_snippets) >= MAX_CALLEE_SNIPPETS:
+                break
+            key = (func_risk.filepath, func_risk.name)
+            func_ev = evidence_lookup.get(key)
+            if not func_ev:
+                continue
+            # Only look at newly added calls — these are the unknown quantities
+            for callee_name in func_ev.calls_added:
+                if len(callee_snippets) >= MAX_CALLEE_SNIPPETS:
+                    break
+                if callee_name in code_snippets or callee_name in callee_snippets:
+                    continue  # already included
+                # Search all after-ASTs for the callee's definition
+                for _filepath, (_, after_ast) in file_asts.items():
+                    if callee_name in after_ast.functions:
+                        raw = after_ast.functions[callee_name].raw_text
+                        if raw:
+                            if len(raw) > MAX_SNIPPET_CHARS:
+                                raw = raw[:MAX_SNIPPET_CHARS] + "\n// ... (truncated)"
+                            callee_snippets[callee_name] = raw
+                        break
 
         # Summarise the functions that weren't selected to give the LLM
         # awareness of the full scope without sending all the details
@@ -415,6 +586,11 @@ class GeminiClient:
             "triage_reasoning": triage_result.reasoning,
             "function_evidences": function_evidences,
             "code_snippets": code_snippets,
+            "callee_snippets": callee_snippets,
+            "top_feature_entry_points": [
+                {"name": name, "call_depth": depth, "fraction_changed": round(frac, 2)}
+                for name, depth, frac in top_features
+            ],
             "omitted_functions_summary": omitted_summary,
         }
 

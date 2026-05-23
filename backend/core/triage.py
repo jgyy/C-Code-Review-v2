@@ -133,18 +133,19 @@ class TriageResult:
 # ---------------------------------------------------------------------------
 
 WEIGHTS = {
-    "memory_imbalance": 30,
-    "complexity_increase_high": 20,
+    "memory_imbalance": 20,           # was 30 — demoted per fix 5b
+    "complexity_increase_high": 22,   # was 20 — slight bump
     "complexity_increase_medium": 10,
-    "signature_change": 15,
+    "signature_change": 18,           # was 15 — breaking API changes are high-signal
     "pointer_density_increase": 10,
     "recursion_added": 10,
     "recursion_removed": 5,
     "large_change": 5,
-    "new_memory_ops": 15,
+    "new_memory_ops": 8,              # was 15 — demoted per fix 5b
     "parse_errors": 10,
     "depth_increase": 8,
-    "orphan_function": 12,
+    "orphan_function": 25,            # was 12 — modified function that lost all callers
+    "deleted_with_callers": 40,       # new — deleted function that leaves dangling callers
     "new_loops": 5,
 }
 
@@ -159,11 +160,24 @@ def score_function(evidence: FunctionEvidence, filepath: str = "") -> FunctionRi
     signals = []
 
     if evidence.change_type == ChangeType.DELETED:
+        # A deleted function with live callers is the most dangerous deletion:
+        # those callers now reference a function that no longer exists, which is
+        # a linker error or, worse, a silent ABI break if the symbol is resolved
+        # to a different definition at link time.
+        if evidence.callers_lost:
+            score = WEIGHTS["deleted_with_callers"]
+            signals.append(
+                f"Deleted function had {len(evidence.callers_lost)} live caller(s): "
+                + ", ".join(evidence.callers_lost[:5])
+                + (" ..." if len(evidence.callers_lost) > 5 else "")
+            )
+        else:
+            score = 5
         return FunctionRisk(
             name=evidence.name,
-            risk_score=5,
-            risk_level=RiskLevel.LOW,
-            signals=["Function deleted"],
+            risk_score=min(score, 100),
+            risk_level=RiskLevel.CRITICAL if score >= 40 else RiskLevel.LOW,
+            signals=signals if signals else ["Function deleted (no known callers)"],
             filepath=filepath,
         )
 

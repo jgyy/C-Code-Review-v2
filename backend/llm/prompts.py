@@ -46,14 +46,37 @@ Each finding belongs in EXACTLY ONE bucket. Never repeat the same finding across
 - insights: non-obvious structural observations about the change (e.g. "this PR removes the only caller of cleanup_ctx()")
 - recommendations: one concrete action per finding already listed; no new findings here, just what to do about them
 
+### Memory findings — one mention maximum
+If a function has a malloc/free count mismatch but NO other risk factors (no complexity spike, no new callers, no
+signature change), put it in `memory_safety_issues` ONCE and nowhere else — not in `potential_bugs`, not in
+`insights`, not in `recommendations`. A malloc/free imbalance in a trivial function is often a caller-owns-memory
+pattern, not a true leak; say so if the function is simple.
+
+### Deleted functions with live callers — highest priority signal
+If `callers_lost` is non-empty for a deleted function, this is a dangling-reference risk: existing code calls a
+function that no longer exists. Flag this as CRITICAL in the function's analysis and explain which callers are
+now broken. This takes priority over all memory findings.
+
+### Caller chain awareness
+If `caller_chain` is non-empty, consider the blast radius: a bug in the analysed function propagates to every
+function in the chain. A high-complexity change deep in a call chain is riskier than the same change in a leaf.
+
+### Top feature entry points
+If `top_feature_entry_points` is provided, the first entry is the most likely new feature root added by this PR.
+Mention it by name in the `insights` field if it is itself changed or calls changed functions.
+
 ### Completeness
 Only emit a bucket entry if you have a specific, concrete finding for it. Empty arrays are correct and preferred over vague filler.
 
 ### Function analyses
 For each function in the evidence, `risk_signals` must be short phrases extracted directly from the evidence (e.g. "malloc/free imbalance: +2 malloc, 0 free"). `suggestion` must be one sentence naming the exact fix.
 
-Focus on: memory leaks, double-free, use-after-free, unchecked return values, buffer overflows, API contract violations, recursion risks.
-Ignore: style, documentation, naming.
+Focus on (in priority order):
+1. Deleted functions with live callers (dangling references)
+2. Unchecked return values, buffer overflows, API contract violations
+3. Recursion risks, logic errors introduced by the change
+4. Memory leaks / double-free (mention once, concisely)
+Ignore: style, documentation, naming, malloc/free counts in trivial functions.
 
 Respond in JSON format matching the provided schema."""
 
@@ -108,7 +131,7 @@ USER_PROMPT_FAST_PATH = """## Pull Request Analysis
 
 {function_evidence_text}
 
-### Code Snippets (High-Risk Functions)
+{top_feature_text}### Code Snippets (High-Risk Functions and Their New Callees)
 
 {code_snippets_text}
 
@@ -134,7 +157,7 @@ CRITICAL: every string must name a specific function/variable. No generic advice
       "security_concerns": ["Specific security issue in this function"]
     }}
   ],
-  "memory_safety_issues": ["Concrete instance: function name + specific allocation/free mismatch or overflow"],
+  "memory_safety_issues": ["Concrete instance: function name + specific allocation/free mismatch or overflow — omit if only signal is a trivial count mismatch"],
   "security_concerns": ["Concrete instance: function name + attacker-controlled path or dangerous sink"],
   "potential_bugs": ["Concrete instance: function name + specific logic error or unchecked return value"]
 }}
@@ -236,10 +259,18 @@ def build_fast_path_prompt(context: dict) -> str:
         func_lines.append(f"#### `{fe.get('name', 'unknown')}`")
         func_lines.append(f"- Change type: {fe.get('change_type', 'unknown')}")
         func_lines.append(f"- Complexity: {fe.get('complexity_before', 0)} → {fe.get('complexity_after', 0)}")
-        
-        if fe.get("malloc_free_imbalance", 0) != 0:
-            func_lines.append(f"- **Memory imbalance:** {fe.get('malloc_free_imbalance')} (potential leak/double-free)")
-        
+
+        # Fix 5c: only emit memory imbalance line for non-trivial cases.
+        # Suppress if imbalance is exactly ±1 and complexity is low — this is
+        # almost always a caller-owns-memory pattern, not a real leak.
+        imbalance = fe.get("malloc_free_imbalance", 0)
+        complexity_after = fe.get("complexity_after", fe.get("complexity_before", 0))
+        if imbalance != 0 and not (abs(imbalance) == 1 and complexity_after < 5):
+            # No bold — memory is one signal among many, not the headline
+            func_lines.append(
+                f"- Memory imbalance: {imbalance:+d} (malloc minus free delta)"
+            )
+
         if fe.get("return_type_changed"):
             func_lines.append("- **Return type changed**")
         
@@ -248,18 +279,41 @@ def build_fast_path_prompt(context: dict) -> str:
         
         if fe.get("calls_removed"):
             func_lines.append(f"- Removed calls: {', '.join(fe.get('calls_removed', []))}")
+
+        # Fix 3b: callers_lost is the most dangerous deletion signal
+        callers_lost = fe.get("callers_lost", [])
+        if callers_lost:
+            func_lines.append(
+                f"- **CALLERS LOST (dangling reference risk):** {', '.join(callers_lost[:5])}"
+                + (" ..." if len(callers_lost) > 5 else "")
+            )
+
+        # Fix 2: caller chain (blast radius)
+        caller_chain = fe.get("caller_chain", [])
+        if caller_chain:
+            func_lines.append(f"- Called by: {', '.join(caller_chain[:5])}"
+                              + (" ..." if len(caller_chain) > 5 else ""))
         
         func_lines.append("")
     
     function_evidence_text = "\n".join(func_lines) if func_lines else "No function changes detected."
     
-    # Format code snippets
+    # Format primary code snippets (the changed functions themselves)
     snippets = context.get("code_snippets", {})
     snippet_lines = []
     for name, code in snippets.items():
-        snippet_lines.append(f"#### `{name}`")
+        snippet_lines.append(f"#### `{name}` (changed function)")
         snippet_lines.append("```c")
-        # Truncate very long functions
+        if len(code) > 2000:
+            code = code[:2000] + "\n// ... (truncated)"
+        snippet_lines.append(code)
+        snippet_lines.append("```")
+        snippet_lines.append("")
+
+    # Fix 1: callee snippets — functions newly called by high-risk functions
+    for name, code in context.get("callee_snippets", {}).items():
+        snippet_lines.append(f"#### `{name}` (callee — newly called)")
+        snippet_lines.append("```c")
         if len(code) > 2000:
             code = code[:2000] + "\n// ... (truncated)"
         snippet_lines.append(code)
@@ -267,6 +321,19 @@ def build_fast_path_prompt(context: dict) -> str:
         snippet_lines.append("")
     
     code_snippets_text = "\n".join(snippet_lines) if snippet_lines else "No high-risk code snippets."
+
+    # Fix 4: top feature entry points
+    top_features = context.get("top_feature_entry_points", [])
+    if top_features:
+        top_feat_lines = ["### Top Feature Entry Points (deepest new call chains)\n"]
+        for feat in top_features:
+            top_feat_lines.append(
+                f"- `{feat['name']}`: call depth {feat['call_depth']}, "
+                f"{feat['fraction_changed']:.0%} of reachable functions changed"
+            )
+        top_feature_text = "\n".join(top_feat_lines) + "\n"
+    else:
+        top_feature_text = ""
     
     return USER_PROMPT_FAST_PATH.format(
         repo_name=context.get("repo_name", "unknown"),
@@ -276,6 +343,7 @@ def build_fast_path_prompt(context: dict) -> str:
         triage_reasoning=context.get("triage_reasoning", "No reasoning provided"),
         function_evidence_text=function_evidence_text,
         code_snippets_text=code_snippets_text,
+        top_feature_text=top_feature_text,
     )
 
 
