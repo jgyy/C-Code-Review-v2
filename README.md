@@ -27,7 +27,8 @@
 <img width="1494" height="774" alt="image" src="https://github.com/user-attachments/assets/f7aa2d35-c835-403f-b1c9-f8a21641a9f3" />
 
 ### PR Analysis
-<img width="1487" height="774" alt="image" src="https://github.com/user-attachments/assets/202a34fb-f21b-4087-bb4f-5f77056abe07" />
+<img width="1655" height="792" alt="Screenshot 2026-06-14 at 4 33 07 PM" src="https://github.com/user-attachments/assets/e2522eef-4dc6-459c-900c-d787df3e3a8d" />
+
 
 ### User Flow
 
