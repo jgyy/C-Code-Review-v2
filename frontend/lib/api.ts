@@ -6,11 +6,23 @@ export interface AnalyzeRequest {
   owner: string;
   repo: string;
   pr_number: number;
+  // Whether to post the review as a GitHub PR comment. Defaults to true
+  // server-side if omitted.
+  post_comment?: boolean;
 }
+
+// Pipeline step reported while status === "processing".
+export type JobStage =
+  | "fetching_pr"
+  | "parsing_files"
+  | "computing_evidence"
+  | "triage"
+  | "llm_analysis";
 
 export interface JobStatus {
   job_id: string;
   status: "pending" | "processing" | "completed" | "failed";
+  stage?: JobStage;
   // Job metadata stored at enqueue time
   owner?: string;
   repo?: string;
@@ -45,9 +57,11 @@ export interface AnalysisResult {
   repo?: string;
   pr_number?: number;
   status: "pending" | "processing" | "completed" | "failed";
+  stage?: JobStage;
 
   // Timestamps — optional; backend doesn't always persist these
   created_at?: string;
+  started_at?: string;
   completed_at?: string;
 
   // Risk
@@ -80,6 +94,10 @@ export interface AnalysisResult {
 
   // Error info if failed
   error?: string;
+
+  // Mermaid flowchart illustrating the change's call-graph impact.
+  // Undefined if the LLM didn't produce one or it failed validation.
+  mermaid_diagram?: string;
 }
 
 export interface CacheStats {

@@ -37,6 +37,13 @@ class AnalyzeRequest(BaseModel):
         description="GitHub App installation ID (optional, for app auth)"
     )
 
+    # Opt-out of posting the review as a GitHub PR comment. Analysis still
+    # runs and results are still viewable in the dashboard either way.
+    post_comment: bool = Field(
+        default=True,
+        description="Whether to post the analysis as a comment on the GitHub PR",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Response Models
@@ -54,6 +61,11 @@ class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
 
+    # Current pipeline step while status == "processing", e.g. "fetching_pr",
+    # "parsing_files", "computing_evidence", "triage", "llm_analysis". None
+    # once the job reaches a terminal state.
+    stage: Optional[str] = None
+
     # Job metadata (stored at enqueue time)
     owner: Optional[str] = None
     repo: Optional[str] = None
@@ -61,6 +73,7 @@ class JobStatusResponse(BaseModel):
 
     # Timestamps
     created_at: Optional[str] = None
+    started_at: Optional[str] = None
     completed_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -91,12 +104,16 @@ class AnalysisResultResponse(BaseModel):
     job_id: str
     status: JobStatus
 
+    # Current pipeline step while status == "processing" — see JobStatusResponse.stage.
+    stage: Optional[str] = None
+
     owner: Optional[str] = None
     repo: Optional[str] = None
     pr_number: Optional[int] = None
 
     # Timestamps
     created_at: Optional[str] = None
+    started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
     # Files analysis
@@ -119,6 +136,14 @@ class AnalysisResultResponse(BaseModel):
     memory_safety_issues: list[str] = Field(default_factory=list)
     security_concerns: list[str] = Field(default_factory=list)
     potential_bugs: list[str] = Field(default_factory=list)
+
+    # Failure/skip info (present when status is "failed" or the PR was skipped)
+    error: Optional[str] = None
+    skipped_reason: Optional[str] = None
+
+    # Mermaid flowchart source illustrating the change's call-graph impact.
+    # None if the LLM didn't produce one or it failed validation/repair.
+    mermaid_diagram: Optional[str] = None
 
 
 class CacheStatsResponse(BaseModel):
