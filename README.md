@@ -75,6 +75,33 @@
 
 ---
 
+## Architecture
+
+```mermaid
+flowchart LR
+    PR["PR opened / updated"] --> WH["GitHub webhook"]
+    WH --> API["FastAPI API handler"]
+    API --> FETCH["Fetch both sides of every changed .c/.h file (PyGithub)"]
+    FETCH --> CACHE{"Cached AST for this SHA?"}
+    CACHE -->|hit| EVID
+    CACHE -->|miss| PARSE["Parse to AST (tree-sitter)"]
+    PARSE --> STORE["Cache AST by SHA + filepath (Redis)"]
+    STORE --> EVID
+    EVID["Identity tracking (rapidfuzz) + six structural heuristics"] --> TRIAGE{"Risk score (0-100)"}
+    TRIAGE -->|low risk| LLM1["Single LLM call"]
+    TRIAGE -->|high risk / large PR| LLM2["Map-reduce: one call per function + synthesis"]
+    LLM1 --> REVIEW["Structured review JSON"]
+    LLM2 --> REVIEW
+    REVIEW --> DIAG["Mermaid call-graph diagram (validated, auto-fix retry)"]
+    REVIEW --> COMMENT["Posted as GitHub PR comment"]
+    DIAG --> COMMENT
+    REVIEW --> DASH["Dashboard: job history, evidence, cache stats"]
+```
+
+The heuristic layer never hands the LLM a conclusion — only structured evidence (deltas, counts, function-level facts) — so the model explains findings grounded in the AST diff rather than re-describing the raw text diff.
+
+---
+
 ## Installation
 
 ### Prerequisites
