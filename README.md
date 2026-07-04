@@ -38,6 +38,16 @@
 4. **View the GitHub PR comment** — a formatted review is posted automatically to the pull request with a risk badge, per-function findings, memory safety issues, and recommendations.
 5. **View full results in the dashboard** — click the job to see all heuristic evidence, the LLM narrative, and cache statistics.
 
+The comment posted on the PR includes:
+- A one-sentence **headline** summarising the most important finding
+- A **risk badge** (low / medium / high / critical) with a numeric score out of 100
+- A **summary** paragraph explaining what changed and why it matters
+- **Per-function breakdown** listing risk signals, memory issues, and a concrete suggestion for each changed function
+- **Memory safety issues**, **security concerns**, and **potential bugs** as distinct labelled lists
+- **Recommendations** the author can act on before merging
+
+If the author pushes a new commit addressing the findings, analysis fires again automatically on the `synchronize` webhook event — the second run is faster because unchanged files hit the AST cache.
+
 ---
 
 ## Technology Stack
@@ -220,6 +230,33 @@ Environment variables are loaded via `serverless-dotenv-plugin` from the `.env` 
 
 Enter a repository owner, repo name, and PR number in the **Quick Analyze** panel on the dashboard. Click **Start Analysis**. The job appears in the dashboard. Once done, the review is posted as a comment on the GitHub PR and the full results (heuristic evidence, LLM narrative, cache stats) are viewable in the dashboard.
 
+
+---
+
+## Reflection
+
+### What worked
+
+**Parsing before diffing** was the right foundational decision. Operating on ASTs instead of text lines meant every downstream layer worked with semantic units — functions, call graphs, control flow — rather than line numbers and `+`/`-` characters.
+
+**Structured evidence in LLM prompts rather than raw code** proved its value immediately. Feeding the model `complexity_delta: +8, malloc/free imbalance: +1, calls_added: ["memcpy"]` rather than 200 lines of C produced more accurate, more specific, and more consistent output. The model explains findings; the heuristics discover them.
+
+**The triage layer as a cost gate** worked exactly as designed. Trivial PRs (renames, whitespace, comment-only changes) were skipped with no LLM call. Most real PRs hit the fast path in a single call. Only genuinely complex diffs triggered the map-reduce deep-analysis path, keeping API costs proportional to actual risk.
+
+### What failed
+
+**A package naming collision with PyGithub** was a silent failure mode early on — an internal module shadowed the installed `github` package. It didn't fail at import time with a clear error; it imported successfully and only crashed later when calling a PyGithub method that didn't exist on our own module. Renaming the internal module resolved it — any internal package sharing a name with an installed dependency is worth auditing for early.
+
+**Naive set-diff on function names** initially treated every renamed function as a deletion + addition, cascading into false-positive orphan signals and inflated risk scores. Adding `rapidfuzz` identity tracking — pairing functions by name and signature similarity before diffing — eliminated this.
+
+### Changes made and rationale
+
+| Change | Rationale |
+|---|---|
+| Heuristics emit evidence bundles, not verdict strings | Verdict strings tell the LLM what to conclude. Evidence gives the LLM facts to reason from. The latter produces more grounded output with fewer hallucinated details. |
+| Added `rapidfuzz` identity matching before diffing | Without it, any renamed function appears as a deletion + addition, cascading into false-positive orphan signals, inflated risk scores, and broken call graph diffs. |
+| Map-reduce for high-risk/large PRs | A single-pass LLM call degraded accuracy near the end of long contexts on large diffs. Splitting into one call per function (parallelised) plus one synthesis call keeps every individual prompt small and accurate regardless of PR size. |
+| Vercel proxy rewrite instead of CORS headers | Eliminates the browser preflight round-trip, removes the need to maintain an allow-list on the backend, and decouples the frontend deploy URL from the backend URL. |
 
 ---
 
