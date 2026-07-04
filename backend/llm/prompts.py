@@ -81,6 +81,40 @@ Ignore: style, documentation, naming, malloc/free counts in trivial functions.
 Respond in JSON format matching the provided schema."""
 
 
+# A dedicated, JSON-free prompt for the Mermaid diagram. Kept as a SEPARATE
+# call from the main analysis (see llm/client.py _generate_mermaid_diagram)
+# rather than a field embedded in the structured-JSON response: a multi-line
+# diagram string with quotes/newlines is exactly the kind of value that
+# breaks strict JSON parsing when a model doesn't escape it perfectly, and a
+# single parse failure there was taking down the ENTIRE PR analysis, not
+# just the diagram. Isolating it means a bad diagram degrades gracefully to
+# "no diagram" without touching the rest of the review.
+SYSTEM_PROMPT_MERMAID = """You output ONLY raw Mermaid flowchart source. No markdown code fences, no JSON, no explanation — just the diagram, or the exact text NONE if there is nothing meaningful to draw.
+
+Syntax rules — follow EXACTLY, this will be rejected and regenerated if it doesn't parse:
+- First line is exactly: flowchart TD
+- Every node reference is a short bare identifier: letters, digits, underscores only (e.g. parse_input, n1).
+  NEVER put spaces, parens, or dots in a node id.
+- Give a node a label only on its first appearance, using square brackets: parse_input["parse_input()"].
+  Every later reference to that same node uses ONLY the bare id, no brackets: parse_input --> alloc_node
+- One edge per line, arrows are exactly -->. Optional edge label: parse_input -->|frees| free_node
+- To mark a changed/risky node: after all edges, add a line like: class parse_input,alloc_node risky
+  then define classDef risky fill:#f66,stroke:#900 as the LAST line.
+- No markdown code fences, no comments, no HTML tags, no semicolons, no subgraphs.
+- Keep it to 5-12 nodes — only functions actually named in the evidence you're given.
+- If there is nothing meaningful to diagram (e.g. a single isolated function with no callers/callees), respond
+  with exactly: NONE"""
+
+USER_PROMPT_MERMAID = """## Call-graph evidence for this PR
+
+{function_evidence_text}
+
+---
+
+Draw a Mermaid flowchart of this PR's call-graph impact: the changed functions and their direct callers/callees.
+Respond with ONLY the diagram source (or NONE), per the rules in your system prompt."""
+
+
 SYSTEM_PROMPT_DEEP_MAP = """You are an expert C code reviewer analyzing a single function.
 
 You will receive:
@@ -250,10 +284,9 @@ Respond in JSON:
 # Prompt Builders
 # ---------------------------------------------------------------------------
 
-def build_fast_path_prompt(context: dict) -> str:
-    """Build the user prompt for fast-path analysis."""
-    
-    # Format function evidence
+def _format_function_evidence(context: dict) -> str:
+    """Shared function-evidence formatting, used by both the main analysis
+    prompt and the standalone Mermaid diagram prompt."""
     func_lines = []
     for fe in context.get("function_evidences", []):
         func_lines.append(f"#### `{fe.get('name', 'unknown')}`")
@@ -273,10 +306,10 @@ def build_fast_path_prompt(context: dict) -> str:
 
         if fe.get("return_type_changed"):
             func_lines.append("- **Return type changed**")
-        
+
         if fe.get("calls_added"):
             func_lines.append(f"- New calls: {', '.join(fe.get('calls_added', []))}")
-        
+
         if fe.get("calls_removed"):
             func_lines.append(f"- Removed calls: {', '.join(fe.get('calls_removed', []))}")
 
@@ -293,11 +326,24 @@ def build_fast_path_prompt(context: dict) -> str:
         if caller_chain:
             func_lines.append(f"- Called by: {', '.join(caller_chain[:5])}"
                               + (" ..." if len(caller_chain) > 5 else ""))
-        
+
         func_lines.append("")
-    
-    function_evidence_text = "\n".join(func_lines) if func_lines else "No function changes detected."
-    
+
+    return "\n".join(func_lines) if func_lines else "No function changes detected."
+
+
+def build_mermaid_prompt(context: dict) -> str:
+    """Build the standalone user prompt for the Mermaid diagram call."""
+    return USER_PROMPT_MERMAID.format(
+        function_evidence_text=_format_function_evidence(context),
+    )
+
+
+def build_fast_path_prompt(context: dict) -> str:
+    """Build the user prompt for fast-path analysis."""
+
+    function_evidence_text = _format_function_evidence(context)
+
     # Format primary code snippets (the changed functions themselves)
     snippets = context.get("code_snippets", {})
     snippet_lines = []

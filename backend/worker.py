@@ -63,6 +63,7 @@ async def _run(event: dict) -> None:
         repo_name=event["repo_name"],
         pr_number=event["pr_number"],
         installation_id=event.get("installation_id"),
+        post_comment=event.get("post_comment", True),
     )
 
 

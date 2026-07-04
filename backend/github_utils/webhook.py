@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from cache.redis import enqueue_job, update_job_status
 from workers.pipeline import AnalysisPipeline, PipelineConfig
 from github_utils.client import GitHubClient
-from llm.client import GeminiClient
+from llm.client import get_llm_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -153,6 +153,7 @@ async def process_pr_job(
     repo_name: str,
     pr_number: int,
     installation_id: Optional[int] = None,
+    post_comment: bool = True,
 ):
     """
     Background task to process a PR analysis job.
@@ -162,7 +163,7 @@ async def process_pr_job(
     try:
         # Initialize clients
         github_client = GitHubClient()
-        llm_client = GeminiClient()
+        llm_client = get_llm_client()
         
         # Run pipeline
         pipeline = AnalysisPipeline(PipelineConfig())
@@ -192,8 +193,8 @@ async def process_pr_job(
                 "analysis": result.analysis.model_dump() if result.analysis else None,
             }, risk_level=risk_level_str)
             
-            # Post comment to PR if we have analysis
-            if result.analysis and not result.skipped_reason:
+            # Post comment to PR if we have analysis (and the caller opted in)
+            if post_comment and result.analysis and not result.skipped_reason:
                 comment_body = format_analysis_comment(result.analysis, job_id=job_id)
                 await github_client.post_pr_comment(
                     owner=owner,
@@ -280,6 +281,10 @@ def format_analysis_comment(analysis, job_id: str = "") -> str:
         for rec in analysis.recommendations[:5]:
             lines.append(f"- {rec}")
         lines.append("")
+
+    if analysis.mermaid_diagram:
+        # GitHub renders ```mermaid fences natively in PR comments/markdown.
+        lines += ["**Change Impact**", "", "```mermaid", analysis.mermaid_diagram, "```", ""]
 
     if job_url:
         lines += [

@@ -29,9 +29,9 @@ from core.heuristics import (
 )
 from core.triage import triage, TriageResult, Route
 from workers.pool import parse_files_parallel
-from cache.redis import get_cached_ast, set_cached_ast
+from cache.redis import get_cached_ast, set_cached_ast, set_job_stage
 from github_utils.client import GitHubClient
-from llm.client import GeminiClient
+from llm.client import BaseLLMClient
 from llm.schemas import PRAnalysis
 import logging
 
@@ -96,7 +96,7 @@ class AnalysisPipeline:
     async def analyze_pr(
         self,
         github_client: GitHubClient,
-        llm_client: GeminiClient,
+        llm_client: BaseLLMClient,
         repo_owner: str,
         repo_name: str,
         pr_number: int,
@@ -116,6 +116,7 @@ class AnalysisPipeline:
         
         try:
             # 1. Fetch PR info and changed files
+            await set_job_stage(job_id, "fetching_pr")
             pr_info = await github_client.get_pr_info(repo_owner, repo_name, pr_number)
             logger.info(f"pr_info: {pr_info}")
             if not pr_info:
@@ -144,8 +145,9 @@ class AnalysisPipeline:
                 return result
             
             result.files_analyzed = len(c_files)
-            
+
             # 2. Fetch and parse file contents
+            await set_job_stage(job_id, "parsing_files")
             base_sha = pr_info["base"]["sha"]
             head_sha = pr_info["head"]["sha"]
             
@@ -179,6 +181,7 @@ class AnalysisPipeline:
                 file_asts[filepath] = (before_ast, after_ast)
             
             # 3. Compute evidence
+            await set_job_stage(job_id, "computing_evidence")
             logger.info("Compute evidence")
             file_evidences: list[FileEvidence] = []
             for filepath, (before, after) in file_asts.items():
@@ -189,6 +192,7 @@ class AnalysisPipeline:
             pr_evidence = compute_pr_evidence(file_evidences)
             logger.info(f"pr_evidence: {pr_evidence}")
             # 4. Triage
+            await set_job_stage(job_id, "triage")
             triage_result = triage(pr_evidence)
             result.triage_result = triage_result
             logger.info(f"tri_res: {triage_result}")
@@ -202,6 +206,7 @@ class AnalysisPipeline:
                 return result
             
             # 6. LLM Analysis
+            await set_job_stage(job_id, "llm_analysis")
             if triage_result.route == Route.FAST_PATH:
                 logger.info(f"Route.FAST_PATH")
                 analysis = await llm_client.analyze_fast_path(

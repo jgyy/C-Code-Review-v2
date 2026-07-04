@@ -1,10 +1,13 @@
 """
-cache/redis.py — Upstash Redis client for AST caching and job queue
+cache/redis.py — Redis client for AST caching and job queue
 
-Uses the HTTP-based Upstash Redis client which is ideal for serverless:
-- No persistent connections needed
-- Works great with Vercel's edge runtime
-- Automatic retry and connection pooling
+Supports two backends, selected by whichever environment variables are set:
+- Upstash Redis (HTTP-based) — ideal for serverless/Lambda deployment.
+- Standard local/self-hosted Redis via REDIS_URL (redis:// or rediss://) —
+  handy for local development without an Upstash account.
+
+Both client types expose the same get/set/lpush/rpop/keys/dbsize methods used
+throughout this module, so callers never need to know which backend is active.
 
 Cache key strategy:
 - AST cache: ast:{sha}:{filepath_hash} -> JSON serialized FileAST
@@ -23,13 +26,14 @@ from dotenv import load_dotenv
 
 from datetime import datetime, timezone
 
-from upstash_redis.asyncio import Redis
+from upstash_redis.asyncio import Redis as UpstashRedis
+from redis.asyncio import Redis as LocalRedis
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 # Global Redis client - created at module level for connection reuse
-redis_client: Optional[Redis] = None
+redis_client: Optional[Any] = None
 
 # Cache TTLs
 AST_CACHE_TTL = 86400  # 24 hours
@@ -37,22 +41,34 @@ JOB_TTL = 86400  # 1 hour
 RESULT_TTL = 86400 * 7  # 7 days
 
 
-def _build_redis_client() -> Optional[Redis]:
+def _build_redis_client() -> Optional[Any]:
     """
     Build a Redis client from environment variables.
     Called at lifespan startup AND lazily on first use, so Lambda cold starts
     that somehow skip lifespan still get a working client.
+
+    Priority:
+    1. REDIS_URL — standard redis://[:password@]host:port[/db] or rediss://,
+       for local Redis or any self-hosted/managed instance speaking the normal
+       wire protocol.
+    2. UPSTASH_REDIS_REST_URL/TOKEN (or Vercel's KV_REST_API_* aliases) — the
+       HTTP-based Upstash client, best for serverless deployment.
     """
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        logger.info("Redis: connecting to local/standard Redis via REDIS_URL")
+        return LocalRedis.from_url(redis_url, decode_responses=True)
+
     url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
     token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
 
     if url and token:
-        logger.info("Redis: connecting with explicit URL/token")
-        return Redis(url=url, token=token)
+        logger.info("Redis: connecting to Upstash with explicit URL/token")
+        return UpstashRedis(url=url, token=token)
 
     logger.warning(f"Redis: env vars missing (url={url!r}, token={'set' if token else 'unset'})")
     try:
-        return Redis.from_env()
+        return UpstashRedis.from_env()
     except Exception as e:
         logger.error(f"Redis: from_env() failed: {e}")
         return None
@@ -66,7 +82,7 @@ async def init_redis() -> None:
         logger.error("Redis not configured — caching and job queue disabled")
 
 
-def _get_redis() -> Optional[Redis]:
+def _get_redis() -> Optional[Any]:
     """Return the Redis client, initialising lazily if needed (e.g. Lambda cold start)."""
     global redis_client
     if redis_client is None:
@@ -176,12 +192,18 @@ async def dequeue_job() -> Optional[tuple[str, dict]]:
     return None
 
 
-async def update_job_status(job_id: str, status: str, result: Optional[dict] = None, risk_level: Optional[str] = None) -> bool:
+async def update_job_status(
+    job_id: str,
+    status: str,
+    result: Optional[dict] = None,
+    risk_level: Optional[str] = None,
+    stage: Optional[str] = None,
+) -> bool:
     """Update job status and optionally store result."""
     rc = _get_redis()
     if not rc:
         return False
-    
+
     try:
         # Merge with existing data if present; otherwise write a minimal record.
         # The key may have expired (JOB_TTL) if the worker took a long time to
@@ -198,16 +220,30 @@ async def update_job_status(job_id: str, status: str, result: Optional[dict] = N
             data["completed_at"] = datetime.now(timezone.utc).isoformat()
         if risk_level is not None:
             data["risk_level"] = risk_level
+        if stage is not None:
+            data["stage"] = stage
+        elif status in ("completed", "failed"):
+            data.pop("stage", None)
         await rc.set(f"job:{job_id}", json.dumps(data), ex=JOB_TTL)
-        
+
         # Store result if provided
         if result:
             await rc.set(f"result:{job_id}", json.dumps(result), ex=RESULT_TTL)
-        
+
         return True
     except Exception as e:
         print(f"Redis update error: {e}")
     return False
+
+
+async def set_job_stage(job_id: str, stage: str) -> bool:
+    """
+    Lightweight progress update: record which pipeline stage a job is
+    currently in, without touching status/result. Called frequently from
+    within the pipeline so the frontend can show real progress instead of
+    a static "processing" spinner.
+    """
+    return await update_job_status(job_id, "processing", stage=stage)
 
 
 async def get_job_status(job_id: str) -> Optional[dict]:

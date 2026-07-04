@@ -1,17 +1,19 @@
 "use client";
 
-import { use, useState, useCallback } from "react";
+import { use, useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { isValid } from "date-fns";
 import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 import { RiskBadge } from "@/components/jobs/risk-badge";
+import { MermaidDiagram } from "@/components/jobs/mermaid-diagram";
 import { fetcher } from "@/lib/api";
-import type { AnalysisResult, FunctionAnalysis } from "@/lib/api";
+import type { AnalysisResult, FunctionAnalysis, JobStage } from "@/lib/api";
 import {
   Loader2, ArrowLeft, ExternalLink, Clock, Database,
   AlertTriangle, Lightbulb, Sparkles, Shield, Bug,
   ChevronDown, ChevronRight, ChevronLeft, Search, X,
+  GitPullRequest, FileCode2, Microscope, Gauge, Sparkle, Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +25,99 @@ function safeDuration(createdAt?: string, completedAt?: string) {
   if (!isValid(s) || !isValid(e) || s.getFullYear() < 2020) return "—";
   const sec = Math.round((e.getTime() - s.getTime()) / 1000);
   return sec < 0 ? "—" : `${sec}s`;
+}
+
+/** How long a job can sit in pending/processing before we flag it as possibly stuck. */
+const STALE_JOB_THRESHOLD_SEC = 120;
+
+/** Ticking "Ns elapsed" counter for a still-running job, based on its start time. */
+function useElapsedSeconds(sinceIso?: string): number | null {
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!sinceIso) return;
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [sinceIso]);
+
+  if (!sinceIso || now === null) return null;
+  const start = new Date(sinceIso);
+  if (!isValid(start) || start.getFullYear() < 2020) return null;
+  return Math.max(0, Math.round((now - start.getTime()) / 1000));
+}
+
+// ─── pipeline stepper ───────────────────────────────────────────────────────
+
+const PIPELINE_STAGES: Array<{
+  key: JobStage;
+  label: string;
+  detail: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { key: "fetching_pr",        label: "Fetching PR",        detail: "Reading changed files from GitHub",       icon: GitPullRequest },
+  { key: "parsing_files",      label: "Parsing files",      detail: "Building ASTs with tree-sitter",           icon: FileCode2 },
+  { key: "computing_evidence", label: "Computing evidence", detail: "Diffing functions before/after",           icon: Microscope },
+  { key: "triage",             label: "Triage",             detail: "Scoring risk, routing to the right depth", icon: Gauge },
+  { key: "llm_analysis",       label: "AI analysis",        detail: "Generating the review",                    icon: Sparkle },
+];
+
+function PipelineStepper({ status, stage }: { status: string; stage?: JobStage }) {
+  // "pending" means the job hasn't been picked up yet — treat it as
+  // "about to start stage 0" rather than showing nothing.
+  const activeIndex = stage
+    ? PIPELINE_STAGES.findIndex((s) => s.key === stage)
+    : status === "pending" ? 0 : -1;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-6">
+      <div className="flex items-center gap-2 mb-5">
+        <Loader2 className="h-4 w-4 animate-spin text-ring" />
+        <h2 className="text-sm font-semibold text-foreground">Analysis in progress</h2>
+      </div>
+      <ol className="space-y-1">
+        {PIPELINE_STAGES.map((s, i) => {
+          const isDone    = activeIndex >= 0 && i < activeIndex;
+          const isActive  = i === activeIndex;
+          const isPending = activeIndex >= 0 ? i > activeIndex : true;
+          const Icon = s.icon;
+          return (
+            <li key={s.key} className="flex items-center gap-3 rounded-md px-2 py-2.5">
+              <div
+                className={cn(
+                  "flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border transition-colors",
+                  isDone    && "border-emerald-400/40 bg-emerald-400/10 text-emerald-400",
+                  isActive  && "border-ring/40 bg-ring/10 text-ring",
+                  isPending && "border-border bg-secondary text-muted-foreground/50",
+                )}
+              >
+                {isDone ? <Check className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
+              </div>
+              <div className="min-w-0">
+                <p className={cn(
+                  "text-sm font-medium",
+                  isDone && "text-muted-foreground",
+                  isActive && "text-foreground",
+                  isPending && "text-muted-foreground/50",
+                )}>
+                  {s.label}
+                </p>
+                <p className={cn(
+                  "text-xs",
+                  isActive ? "text-muted-foreground" : "text-muted-foreground/40",
+                )}>
+                  {isActive ? s.detail : isDone ? "Done" : s.detail}
+                </p>
+              </div>
+              {isActive && (
+                <Loader2 className="ml-auto h-4 w-4 flex-shrink-0 animate-spin text-ring" />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 const RISK_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -413,18 +508,59 @@ function StatCard({ label, value, icon: Icon }: {
   );
 }
 
+// SWR's polling effect depends on this function BY REFERENCE (see swr's
+// useSWR internals: the interval useEffect's deps array includes
+// `refreshInterval` itself). Defining it inline in the component body — as
+// this used to do — creates a new function every render, which tears down
+// and reschedules the poll's setTimeout on every single re-render. This page
+// re-renders once a second on its own (the elapsed-time ticker below), which
+// meant the poll's setTimeout was reset every ~1s and could never survive
+// long enough to reach its own 3s mark — i.e. it silently never fired,
+// exactly matching "stuck in progress until I hard refresh". Hoisting this
+// to module scope gives it a permanently stable reference.
+function jobRefreshInterval(data?: AnalysisResult) {
+  return data?.status === "processing" || data?.status === "pending" ? 3000 : 0;
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
 
-  const { data: result, isLoading, error } = useSWR<AnalysisResult>(
+  const { data: result, isLoading, error, mutate } = useSWR<AnalysisResult>(
     `/api/result/${id}`,
     fetcher,
     {
-      refreshInterval: (data?: AnalysisResult) =>
-        data?.status === "processing" || data?.status === "pending" ? 3000 : 0,
+      refreshInterval: jobRefreshInterval,
+      // Belt-and-suspenders on top of SWR's built-in focus revalidation:
+      // browsers throttle/pause timers in backgrounded tabs (e.g. while you
+      // switch over to view the PR on GitHub), so the interval above can
+      // silently stop firing. Explicitly refetch on focus/reconnect so
+      // switching back to the tab always shows the latest state instead of
+      // requiring a hard refresh.
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
     },
+  );
+
+  // Extra safety net for the same background-tab-throttling issue: force an
+  // immediate refetch whenever the tab becomes visible again, rather than
+  // waiting on the timer or trusting focus-event timing alone.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") mutate();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [mutate]);
+
+  // Must run on every render (before any early return) to satisfy the Rules
+  // of Hooks — hook order can't change based on loading/error state.
+  const isTerminal = result
+    ? result.status === "completed" || result.status === "failed"
+    : true;
+  const elapsedSec = useElapsedSeconds(
+    isTerminal ? undefined : result?.started_at ?? result?.created_at
   );
 
   if (isLoading) {
@@ -447,12 +583,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
     );
   }
 
-  const isTerminal = result.status === "completed" || result.status === "failed";
   const riskLevel  = result.risk_level ?? result.overall_risk;
 
   const cacheLabel = result.cache_hits != null && result.cache_misses != null
     ? `${result.cache_hits} / ${result.cache_hits + result.cache_misses}`
     : "—";
+
+  const isStale = !isTerminal && elapsedSec != null && elapsedSec > STALE_JOB_THRESHOLD_SEC;
 
   return (
     <div className="space-y-6">
@@ -495,7 +632,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard
           label="Duration"
-          value={isTerminal ? safeDuration(result.created_at, result.completed_at) : "In progress…"}
+          value={
+            isTerminal
+              ? safeDuration(result.created_at, result.completed_at)
+              : elapsedSec != null
+                ? `${elapsedSec}s elapsed`
+                : "In progress…"
+          }
           icon={Clock}
         />
         <StatCard
@@ -514,6 +657,22 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
       </div>
 
       {/* ── notices ── */}
+      {isStale && (
+        <div className="flex items-start gap-3 rounded-lg border border-yellow-400/30 bg-yellow-400/5 px-4 py-3 text-sm text-yellow-400">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Taking longer than expected</p>
+            <p className="mt-0.5 text-xs text-yellow-400/80">
+              This job has been {result.status} for over {STALE_JOB_THRESHOLD_SEC}s. It may be
+              stuck — check the backend logs, or{" "}
+              <Link href="/dashboard" className="underline decoration-dotted underline-offset-2">
+                start a new analysis
+              </Link>{" "}
+              instead of waiting further.
+            </p>
+          </div>
+        </div>
+      )}
       {result.skipped_reason && (
         <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">Skipped: </span>
@@ -526,6 +685,11 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
         </div>
       )}
 
+      {/* ── live pipeline progress (replaces blank space while running) ── */}
+      {!isTerminal && (
+        <PipelineStepper status={result.status} stage={result.stage} />
+      )}
+
       {/* ── summary ── */}
       {result.headline && (
         <div className="rounded-lg border border-border bg-card px-6 py-5">
@@ -535,6 +699,14 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
           {result.summary && (
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{result.summary}</p>
           )}
+        </div>
+      )}
+
+      {/* ── change-impact diagram ── */}
+      {result.mermaid_diagram && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold text-foreground">Change Impact</h2>
+          <MermaidDiagram source={result.mermaid_diagram} />
         </div>
       )}
 
