@@ -129,6 +129,15 @@ class PRAnalysis(BaseModel):
         description="Issues that span multiple functions"
     )
 
+    # Optional visual: a Mermaid flowchart illustrating the call-graph impact
+    # of the change (changed functions, their callers/callees). Validated and
+    # retried server-side before being stored — see llm/client.py
+    # _ensure_valid_mermaid(). None if generation/validation didn't succeed.
+    mermaid_diagram: Optional[str] = Field(
+        default=None,
+        description="Mermaid flowchart source illustrating the change's call-graph impact",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Prompt Context Models

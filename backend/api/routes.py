@@ -33,6 +33,7 @@ from cache.redis import (
     get_job_result,
     get_cache_stats,
     list_jobs,
+    update_job_status,
 )
 import logging
 from typing import Optional
@@ -49,6 +50,11 @@ _lambda_client = boto3.client(
     "lambda",
     region_name=os.environ.get("AWS_REGION", "ap-southeast-1"),
 )
+
+# In local dev there's no deployed worker Lambda to invoke. Set
+# WORKER_MODE=local (see backend/.env) to run the same pipeline in-process
+# instead, as a plain asyncio task on the API server's own event loop.
+_LOCAL_WORKER = os.environ.get("WORKER_MODE", "lambda").strip().lower() == "local"
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +81,7 @@ async def analyze_pr(request: AnalyzeRequest):
         "pr_number": request.pr_number,
         "action": "manual",
         "installation_id": request.installation_id,
+        "post_comment": request.post_comment,
     }
 
     success = await enqueue_job(job_id, job_data)
@@ -84,6 +91,38 @@ async def analyze_pr(request: AnalyzeRequest):
         raise HTTPException(
             status_code=503,
             detail="Failed to queue job. Redis may be unavailable.",
+        )
+
+    if _LOCAL_WORKER:
+        # Local dev: no Lambda to invoke. Run the pipeline in-process as a
+        # detached asyncio task so this endpoint still returns immediately;
+        # the frontend polls /api/status/{job_id} exactly as in production.
+        from github_utils.webhook import process_pr_job
+
+        async def _run_local() -> None:
+            try:
+                await process_pr_job(
+                    job_id=job_id,
+                    owner=request.owner,
+                    repo_name=request.repo,
+                    pr_number=request.pr_number,
+                    installation_id=request.installation_id,
+                    post_comment=request.post_comment,
+                )
+            except Exception as e:
+                # process_pr_job normally catches its own errors and marks the
+                # job "failed", but a crash before/outside that try block (e.g.
+                # the initial update_job_status call itself failing) would
+                # otherwise leave the job stuck at "pending" forever.
+                logger.exception(f"Local worker task crashed for job {job_id}")
+                await update_job_status(job_id, "failed", {"error": str(e)})
+
+        asyncio.create_task(_run_local())
+        logger.info(f"Running worker in-process (WORKER_MODE=local) for job {job_id}")
+        return AnalyzeResponse(
+            job_id=job_id,
+            status=JobStatus.PENDING,
+            message=f"Analysis started (local worker) for {request.owner}/{request.repo}/{request.pr_number}",
         )
 
     # boto3.invoke is synchronous — run it in a thread so we don't block the
@@ -96,6 +135,7 @@ async def analyze_pr(request: AnalyzeRequest):
         "repo_name": request.repo,
         "pr_number": request.pr_number,
         "installation_id": request.installation_id,
+        "post_comment": request.post_comment,
     })
 
     try:
@@ -112,9 +152,11 @@ async def analyze_pr(request: AnalyzeRequest):
         logger.info(f"Worker Lambda invoked for job {job_id}, status {status_code}")
     except Exception as e:
         # Worker invocation failed — job is enqueued in Redis but won't run.
-        # Return 500 so the client knows something went wrong rather than
-        # polling forever on a job that will never complete.
+        # Mark it failed immediately so it doesn't sit at "pending" forever,
+        # then return 500 so the client knows something went wrong rather
+        # than polling indefinitely on a job that will never complete.
         logger.exception(f"Failed to invoke worker Lambda for job {job_id}")
+        await update_job_status(job_id, "failed", {"error": f"Failed to start analysis worker: {e}"})
         raise HTTPException(
             status_code=500,
             detail=f"Failed to start analysis worker: {e}",
@@ -149,12 +191,16 @@ async def get_job_status_endpoint(job_id: str):
     return JobStatusResponse(
         job_id=job_id,
         status=status,
+        stage=job_data.get("stage"),
         files_analyzed=job_data.get("files_analyzed"),
         functions_analyzed=job_data.get("functions_analyzed"),
         cache_hits=job_data.get("cache_hits"),
         cache_misses=job_data.get("cache_misses"),
         skipped_reason=job_data.get("skipped_reason"),
         error=job_data.get("error"),
+        created_at=job_data.get("created_at"),
+        started_at=job_data.get("started_at"),
+        completed_at=job_data.get("completed_at"),
     )
 
 
@@ -186,6 +232,11 @@ async def get_analysis_result(job_id: str):
             repo=job_data.get("repo"),
             pr_number=job_data.get("pr_number"),
             status=status,
+            stage=job_data.get("stage"),
+            created_at=job_data.get("created_at"),
+            started_at=job_data.get("started_at"),
+            error=job_data.get("error"),
+            skipped_reason=job_data.get("skipped_reason"),
         )
     
     # Get the result
@@ -195,6 +246,8 @@ async def get_analysis_result(job_id: str):
         return AnalysisResultResponse(
             job_id=job_id,
             status=status,
+            created_at=job_data.get("created_at"),
+            started_at=job_data.get("started_at"),
             headline="Analysis completed but results not available",
         )
     
@@ -203,7 +256,11 @@ async def get_analysis_result(job_id: str):
     cache_hits = result.get("cache_hits")
     cache_misses = result.get("cache_misses")
 
-    analysis = result.get("analysis", {})
+    # result["analysis"] is explicitly None (not just missing) when the
+    # pipeline skipped analysis (e.g. no .c/.h files changed) — `or {}`
+    # catches that case, unlike `.get("analysis", {})` which only applies
+    # its default when the key is absent.
+    analysis = result.get("analysis") or {}
     
     # Convert function analyses
     func_analyses = []
@@ -222,6 +279,7 @@ async def get_analysis_result(job_id: str):
         pr_number=job_data.get("pr_number"),
         status=status,
         created_at=job_data.get("created_at"),
+        started_at=job_data.get("started_at"),
         completed_at=job_data.get("completed_at"),
         files_analyzed=files_analyzed,
         cache_hits=cache_hits,
@@ -236,6 +294,9 @@ async def get_analysis_result(job_id: str):
         memory_safety_issues=analysis.get("memory_safety_issues", []),
         security_concerns=analysis.get("security_concerns", []),
         potential_bugs=analysis.get("potential_bugs", []),
+        skipped_reason=result.get("skipped_reason"),
+        error=job_data.get("error"),
+        mermaid_diagram=analysis.get("mermaid_diagram"),
     )
 
 
@@ -277,6 +338,7 @@ async def list_jobs_endpoint(limit: int = 20, offset: int = 0):
         jobs.append(JobStatusResponse(
             job_id=job_id,
             status=status,
+            stage=job_data.get("stage"),
             owner=job_data.get("owner"),
             repo=job_data.get("repo"),
             pr_number=job_data.get("pr_number"),
@@ -288,6 +350,7 @@ async def list_jobs_endpoint(limit: int = 20, offset: int = 0):
             skipped_reason=job_data.get("skipped_reason"),
             error=job_data.get("error"),
             created_at=job_data.get("created_at"),
+            started_at=job_data.get("started_at"),
             completed_at=job_data.get("completed_at"),
             updated_at=job_data.get("updated_at"),
         ))

@@ -18,7 +18,9 @@ node_modules
 .vercel
 
 backend/.env
+frontend/.env
 backend/.venv
 __pycache__/
+tsconfig.tsbuildinfo
 
 .serverless/

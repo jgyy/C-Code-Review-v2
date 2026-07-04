@@ -69,7 +69,7 @@
 | PyGithub | GitHub API — file fetching, PR comment posting |
 | rapidfuzz | Fuzzy function name matching for identity tracking across renames |
 | Pydantic v2 | Data validation at every layer boundary |
-| boto3 | Invokes the worker Lambda asynchronously from the API Lambda |
+| boto3 | Invokes the worker Lambda asynchronously from the API Lambda (included in `requirements.txt`) |
 
 **Deployed on AWS Lambda** (Serverless Framework) in `ap-southeast-1` — two functions: an API handler (29 s timeout) and an async worker (900 s timeout).
 
@@ -79,8 +79,8 @@
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 18+ / pnpm
+- Python 3.11–3.13 (as of this writing, `pydantic-core`/tree-sitter wheels don't yet support 3.14 — if `python3 -V` reports 3.14, install an older interpreter, e.g. `python3.12`, and use it below)
+- Node.js 18+ and pnpm (see [Installing pnpm](#installing-pnpm) if you don't have it)
 - An [Upstash Redis](https://upstash.com) database
 - A [Gemini API key](https://aistudio.google.com/app/apikey)
 - A [GitHub App](https://docs.github.com/en/apps/creating-github-apps) with:
@@ -99,10 +99,15 @@ cd C-Code-Review-v2
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python3.12 -m venv .venv          # use a 3.11–3.13 interpreter; see Prerequisites
+source .venv/bin/activate.fish    # bash/zsh: .venv/bin/activate | Windows: .venv\Scripts\activate
+python --version                  # sanity check: must print the interpreter above, not your system default
 pip install -r requirements.txt
 ```
+
+> **fish shell users:** `.venv/bin/activate` is a bash script and fails silently under `source` in fish (`case... not inside of switch block`) — every command afterwards then runs against your system Python instead of the venv. Use `.venv/bin/activate.fish`.
+>
+> If `python --version` inside the activated venv still shows your system Python (e.g. 3.14), the venv's `python` symlink was created pointing at the wrong interpreter — a known issue with some `uv`-managed Python installs. Delete `.venv` and re-run `python3.12 -m venv .venv`.
 
 Create a `.env` file:
 
@@ -119,6 +124,16 @@ Run locally:
 
 ```bash
 uvicorn main:app --reload --port 8000
+```
+
+### Installing pnpm
+
+If `pnpm -v` fails, install it via Node's Corepack (bundled with Node 16.13+) or npm:
+
+```bash
+corepack enable && corepack prepare pnpm@latest --activate   # preferred
+# or, if corepack is unavailable:
+npm install -g pnpm
 ```
 
 ### Frontend

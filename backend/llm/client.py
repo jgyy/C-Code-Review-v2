@@ -55,11 +55,12 @@ import json
 import logging
 import os
 import random
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+import anthropic
 
 from cache.redis import _get_redis
 from core.heuristics import ChangeType, FunctionEvidence, PREvidence
@@ -72,7 +73,9 @@ from core.triage import (
 )
 from llm.prompts import (
     SYSTEM_PROMPT_FAST_PATH,
+    SYSTEM_PROMPT_MERMAID,
     build_fast_path_prompt,
+    build_mermaid_prompt,
 )
 from llm.schemas import FunctionAnalysisOutput, PRAnalysis
 
@@ -227,41 +230,108 @@ MAX_SNIPPET_CHARS = 1500
 # Cache TTL for LLM function analysis results (seconds). Matches RESULT_TTL.
 LLM_CACHE_TTL = 86400 * 7  # 7 days
 
+# How many times to ask the LLM to fix an invalid Mermaid diagram before
+# giving up and dropping it. Each attempt is a small, cheap follow-up call
+# (just the diagram, not the full PR analysis) — not a full re-analysis retry.
+MAX_MERMAID_FIX_ATTEMPTS = 2
 
-class GeminiClient:
+# Recognised Mermaid diagram-type headers. We only ever ask for "flowchart TD"
+# but accept "graph" too since some models default to the older syntax name.
+_MERMAID_VALID_HEADERS = ("flowchart", "graph")
+
+
+def _validate_mermaid_syntax(diagram: str) -> Optional[str]:
     """
-    Client for Gemini API interactions.
+    Lightweight structural validator for the constrained Mermaid subset we
+    ask the LLM to produce (see the "Mermaid diagram" section of
+    SYSTEM_PROMPT_FAST_PATH). This is NOT a full Mermaid grammar parser —
+    it's a fast, dependency-free sanity check that catches the failure modes
+    LLMs actually produce: unbalanced brackets, wrong/missing header, code
+    fences leaking through, empty output.
+
+    Returns None if the diagram looks structurally valid, otherwise a short
+    human-readable description of what's wrong (fed back to the LLM so it
+    can fix it).
+    """
+    if not diagram or not diagram.strip():
+        return "empty diagram"
+
+    text = diagram.strip()
+
+    # Reject markdown fences / HTML the model sometimes adds despite instructions.
+    if "```" in text:
+        return "contains a markdown code fence — output raw Mermaid only, no ``` fences"
+    if "<" in text and ">" in text:
+        return "contains what looks like an HTML tag — Mermaid flowchart syntax only, no HTML"
+
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return "empty diagram"
+
+    header = lines[0].strip().lower()
+    if not any(header.startswith(h) for h in _MERMAID_VALID_HEADERS):
+        return f"first line must be 'flowchart TD', got: {lines[0]!r}"
+
+    if len(lines) < 2:
+        return "diagram has a header but no edges/nodes"
+
+    # Balanced-delimiter check across the whole diagram body.
+    pairs = {"[": "]", "(": ")", "{": "}"}
+    closers = set(pairs.values())
+    stack: list[str] = []
+    in_quote = False
+    for ch in text:
+        if ch == '"':
+            in_quote = not in_quote
+            continue
+        if in_quote:
+            continue
+        if ch in pairs:
+            stack.append(pairs[ch])
+        elif ch in closers:
+            if not stack or stack[-1] != ch:
+                return f"unbalanced bracket near {ch!r} — every [, (, {{ needs a matching closer"
+            stack.pop()
+    if in_quote:
+        return "unbalanced quote (\") somewhere in a node label"
+    if stack:
+        return f"unclosed bracket(s): missing {''.join(reversed(stack))!r}"
+
+    return None
+
+
+class BaseLLMClient:
+    """
+    Shared logic for LLM-backed PR analysis (prompt building, caching, retry,
+    response parsing, fallbacks). Subclasses only need to set up their own
+    provider client in __init__ and implement _call_llm_api().
 
     One LLM call per PR. All rate-limit and token-budget concerns are handled
     internally; callers just call analyze() and get a PRAnalysis back.
-
-    Usage:
-        client = GeminiClient()
-        analysis = await client.analyze(pr_evidence, triage_result, file_asts)
     """
+
+    #: Human-readable provider name, used in status/fallback messages.
+    provider_label: str = "LLM"
+    #: Name of the environment variable holding this provider's API key,
+    #: surfaced in the "not configured" message.
+    api_key_env_var: str = "LLM_API_KEY"
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        fast_model: str = "gemini-2.5-flash-lite",
-        deep_model: str = "gemini-2.5-flash",
+        fast_model: str = "",
+        deep_model: str = "",
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key
         self.fast_model = fast_model
         self.deep_model = deep_model
-
-        self.client: Optional[genai.Client] = None
-        if self.api_key:
-            logger.info(f"Initializing Gemini client (fast={fast_model}, deep={deep_model})")
-            self.client = genai.Client(api_key=self.api_key)
-        else:
-            logger.warning("GEMINI_API_KEY not configured — will return static-analysis results")
+        self.client: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def analyze(
+    async def analyze(  # noqa: keep signature identical across subclasses
         self,
         pr_evidence: PREvidence,
         triage_result: TriageResult,
@@ -337,6 +407,10 @@ class GeminiClient:
             )
             pr_analysis = self._parse_pr_analysis(response, triage_result)
 
+            # Diagram is generated as a SEPARATE call (see _generate_mermaid_diagram
+            # docstring for why) so a bad diagram never risks the main analysis parse.
+            pr_analysis.mermaid_diagram = await self._generate_mermaid_diagram(context, model)
+
             # Overwrite static results with LLM results for selected functions
             for fa in pr_analysis.function_analyses:
                 all_function_results[fa.name] = fa
@@ -380,14 +454,32 @@ class GeminiClient:
     # LLM call with retry + backoff
     # ------------------------------------------------------------------
 
+    def _call_llm_api(
+        self, system_prompt: str, user_prompt: str, model: str, json_mode: bool = True
+    ) -> str:
+        """
+        Provider-specific synchronous API call. Must be implemented by
+        subclasses. Runs inside asyncio.to_thread() by _call_gemini().
+
+        json_mode controls whether the provider is told to constrain output
+        to JSON (e.g. Gemini's response_mime_type). Pass False for prompts
+        that ask for plain-text output (e.g. the Mermaid diagram) — forcing
+        JSON mode there makes some providers wrap the answer in a JSON
+        envelope instead of returning the requested plain text.
+        """
+        raise NotImplementedError
+
     async def _call_gemini(
         self,
         system_prompt: str,
         user_prompt: str,
         model: str,
+        json_mode: bool = True,
     ) -> str:
         """
-        Call Gemini with exponential backoff retry on transient errors.
+        Call the configured LLM provider with exponential backoff retry on
+        transient errors. (Named _call_gemini for backwards compatibility —
+        it dispatches to whichever provider this client wraps.)
 
         Retries on:
         - 429 Too Many Requests (rate limit)
@@ -401,28 +493,17 @@ class GeminiClient:
         worker Lambdas are running concurrently against the same API key.
         """
         if not self.client:
-            raise RuntimeError("Gemini client not initialized")
+            raise RuntimeError(f"{self.provider_label} client not initialized")
 
         last_exception: Exception = RuntimeError("No attempts made")
 
         for attempt in range(MAX_RETRIES):
             try:
-                def _sync_call():
-                    response = self.client.models.generate_content(
-                        model=model,
-                        contents=user_prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_prompt,
-                            temperature=0.2,
-                            max_output_tokens=16384,
-                            response_mime_type="application/json",
-                        ),
-                    )
-                    return response.text or ""
-
-                result = await asyncio.to_thread(_sync_call)
+                result = await asyncio.to_thread(
+                    self._call_llm_api, system_prompt, user_prompt, model, json_mode
+                )
                 if attempt > 0:
-                    logger.info(f"Gemini call succeeded on attempt {attempt + 1}")
+                    logger.info(f"{self.provider_label} call succeeded on attempt {attempt + 1}")
                 return result
 
             except Exception as e:
@@ -438,11 +519,12 @@ class GeminiClient:
                     or "502" in error_str
                     or "500" in error_str
                     or "unavailable" in error_str
+                    or "overloaded" in error_str
                 )
 
                 if not is_retryable or attempt == MAX_RETRIES - 1:
                     logger.error(
-                        f"Gemini call failed (attempt {attempt + 1}/{MAX_RETRIES},"
+                        f"{self.provider_label} call failed (attempt {attempt + 1}/{MAX_RETRIES},"
                         f" non-retryable or out of retries): {e}"
                     )
                     raise
@@ -451,12 +533,95 @@ class GeminiClient:
                 jitter = random.uniform(0, delay * 0.2)
                 wait = delay + jitter
                 logger.warning(
-                    f"Gemini call failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
+                    f"{self.provider_label} call failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
                     f"Retrying in {wait:.1f}s"
                 )
                 await asyncio.sleep(wait)
 
         raise last_exception
+
+    # ------------------------------------------------------------------
+    # Mermaid diagram generation / validation / repair
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_diagram_fences(text: str) -> str:
+        """Strip stray markdown code fences a model might add despite instructions."""
+        candidate = text.strip()
+        if candidate.startswith("```"):
+            candidate = candidate.strip("`")
+            if candidate.lower().startswith("mermaid"):
+                candidate = candidate[len("mermaid"):]
+            candidate = candidate.strip()
+        return candidate
+
+    async def _generate_mermaid_diagram(
+        self, context: dict, model: str
+    ) -> Optional[str]:
+        """
+        Generate the Mermaid change-impact diagram as a SEPARATE, plain-text
+        LLM call — deliberately not a field in the main structured-JSON
+        analysis. A multi-line diagram string with quotes/newlines is exactly
+        the kind of value that breaks strict JSON parsing when a model
+        doesn't escape it perfectly, and a parse failure there would take
+        down the entire PR analysis, not just the diagram. Isolating it means
+        a bad diagram just means "no diagram" — everything else still works.
+
+        Validates the result and asks the LLM to fix it (up to
+        MAX_MERMAID_FIX_ATTEMPTS times) before giving up and returning None.
+        """
+        try:
+            raw = await self._call_gemini(
+                system_prompt=SYSTEM_PROMPT_MERMAID,
+                user_prompt=build_mermaid_prompt(context),
+                model=model,
+                json_mode=False,
+            )
+        except Exception as e:
+            logger.warning(f"Mermaid diagram generation call failed: {e}")
+            return None
+
+        candidate = self._strip_diagram_fences(raw)
+        if not candidate or candidate.strip().upper() == "NONE":
+            return None
+
+        error = _validate_mermaid_syntax(candidate)
+        if error is None:
+            return candidate
+
+        for attempt in range(1, MAX_MERMAID_FIX_ATTEMPTS + 1):
+            logger.warning(
+                f"Mermaid diagram invalid (attempt {attempt}/{MAX_MERMAID_FIX_ATTEMPTS}): {error}"
+            )
+            try:
+                fixed = await self._call_gemini(
+                    system_prompt=SYSTEM_PROMPT_MERMAID,
+                    user_prompt=(
+                        f"Validation error in the diagram you produced: {error}\n\n"
+                        f"Broken diagram:\n{candidate}\n\n"
+                        "Respond with ONLY the corrected Mermaid source (or NONE)."
+                    ),
+                    model=model,
+                    json_mode=False,
+                )
+            except Exception as e:
+                logger.warning(f"Mermaid fix attempt {attempt} call failed: {e}")
+                return None
+
+            candidate = self._strip_diagram_fences(fixed)
+            if not candidate or candidate.strip().upper() == "NONE":
+                return None
+
+            error = _validate_mermaid_syntax(candidate)
+            if error is None:
+                logger.info(f"Mermaid diagram fixed on attempt {attempt}")
+                return candidate
+
+        logger.warning(
+            f"Mermaid diagram still invalid after {MAX_MERMAID_FIX_ATTEMPTS} fix attempts "
+            f"({error}) — dropping it"
+        )
+        return None
 
     # ------------------------------------------------------------------
     # Context / prompt building
@@ -774,6 +939,7 @@ class GeminiClient:
                 security_concerns=parsed.get("security_concerns", []),
                 potential_bugs=parsed.get("potential_bugs", []),
                 cross_function_concerns=parsed.get("cross_function_concerns", []),
+                mermaid_diagram=parsed.get("mermaid_diagram"),
             )
         except Exception as e:
             logger.warning(f"PR summary cache get failed: {e}")
@@ -796,6 +962,7 @@ class GeminiClient:
                 "security_concerns": analysis.security_concerns,
                 "potential_bugs": analysis.potential_bugs,
                 "cross_function_concerns": analysis.cross_function_concerns,
+                "mermaid_diagram": analysis.mermaid_diagram,
             }
             await rc.set(key, json.dumps(payload), ex=LLM_CACHE_TTL)
         except Exception as e:
@@ -851,6 +1018,18 @@ class GeminiClient:
         try:
             json.loads(raw)
             return raw
+        except json.JSONDecodeError:
+            pass
+
+        # Second fast path — valid JSON followed by trailing garbage, e.g. a
+        # stray ``` fence the model appends after the object despite
+        # response_mime_type=application/json / "JSON only" instructions.
+        # json.loads() rejects this as "Extra data"; raw_decode() parses just
+        # the first complete value and tells us where it ends, which is
+        # exactly what we want to slice out.
+        try:
+            _, end_idx = json.JSONDecoder().raw_decode(raw.lstrip())
+            return raw.lstrip()[:end_idx]
         except json.JSONDecodeError:
             pass
 
@@ -949,6 +1128,8 @@ class GeminiClient:
                 potential_bugs=data.get("potential_bugs", []),
                 cross_function_concerns=data.get("cross_function_concerns", []),
                 function_analyses=func_analyses,
+                # mermaid_diagram is generated by a separate call, not part of
+                # this JSON response — see _generate_mermaid_diagram().
             )
 
         except Exception:
@@ -990,9 +1171,9 @@ class GeminiClient:
             headline="API key not configured — static analysis only",
             risk_level=RiskLevel(triage_result.overall_risk_level.value),
             risk_score=triage_result.overall_risk_score,
-            summary="Gemini API key not configured. Results are from static heuristics only.",
-            insights=["Configure GEMINI_API_KEY to enable LLM analysis"],
-            recommendations=["Set up Gemini API access"],
+            summary=f"{self.provider_label} API key not configured. Results are from static heuristics only.",
+            insights=[f"Configure {self.api_key_env_var} to enable LLM analysis"],
+            recommendations=[f"Set up {self.provider_label} API access"],
             function_analyses=self._static_results_for_all(triage_result),
         )
 
@@ -1021,3 +1202,125 @@ class GeminiClient:
             insights=["LLM response could not be parsed"],
             recommendations=["Review triage signals manually"],
         )
+
+
+class GeminiClient(BaseLLMClient):
+    """
+    Client for Gemini API interactions.
+
+    Usage:
+        client = GeminiClient()
+        analysis = await client.analyze(pr_evidence, triage_result, file_asts)
+    """
+
+    provider_label = "Gemini"
+    api_key_env_var = "GEMINI_API_KEY"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        fast_model: str = "gemini-2.5-flash-lite",
+        deep_model: str = "gemini-2.5-flash",
+    ):
+        super().__init__(
+            api_key=api_key or os.environ.get("GEMINI_API_KEY"),
+            fast_model=fast_model,
+            deep_model=deep_model,
+        )
+        if self.api_key:
+            logger.info(f"Initializing Gemini client (fast={fast_model}, deep={deep_model})")
+            self.client = genai.Client(api_key=self.api_key)
+        else:
+            logger.warning("GEMINI_API_KEY not configured — will return static-analysis results")
+
+    def _call_llm_api(
+        self, system_prompt: str, user_prompt: str, model: str, json_mode: bool = True
+    ) -> str:
+        response = self.client.models.generate_content(
+            model=model,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.2,
+                max_output_tokens=16384,
+                response_mime_type="application/json" if json_mode else "text/plain",
+            ),
+        )
+        return response.text or ""
+
+
+class ClaudeClient(BaseLLMClient):
+    """
+    Client for Anthropic Claude API interactions — a drop-in alternative to
+    GeminiClient with the same public interface (analyze/analyze_fast_path/
+    analyze_deep), selectable via LLM_PROVIDER=claude.
+
+    Usage:
+        client = ClaudeClient()
+        analysis = await client.analyze(pr_evidence, triage_result, file_asts)
+    """
+
+    provider_label = "Claude"
+    api_key_env_var = "ANTHROPIC_API_KEY"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        fast_model: str = "claude-haiku-4-5",
+        deep_model: str = "claude-sonnet-4-5",
+    ):
+        super().__init__(
+            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            fast_model=fast_model,
+            deep_model=deep_model,
+        )
+        if self.api_key:
+            logger.info(f"Initializing Claude client (fast={fast_model}, deep={deep_model})")
+            self.client = anthropic.Anthropic(api_key=self.api_key)
+        else:
+            logger.warning("ANTHROPIC_API_KEY not configured — will return static-analysis results")
+
+    def _call_llm_api(
+        self, system_prompt: str, user_prompt: str, model: str, json_mode: bool = True
+    ) -> str:
+        if json_mode:
+            # Claude has no native JSON-mode flag like Gemini's response_mime_type;
+            # instruct it in the system prompt and prefill the assistant turn with
+            # "{" so it can't wrap the JSON in prose or a markdown fence.
+            response = self.client.messages.create(
+                model=model,
+                max_tokens=16384,
+                temperature=0.2,
+                system=system_prompt + "\n\nRespond with ONLY valid JSON, no markdown fences, no prose.",
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": "{"},
+                ],
+            )
+            text = "".join(
+                block.text for block in response.content if hasattr(block, "text")
+            )
+            return "{" + text
+
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=16384,
+            temperature=0.2,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return "".join(block.text for block in response.content if hasattr(block, "text"))
+
+
+def get_llm_client() -> BaseLLMClient:
+    """
+    Factory returning the configured LLM client.
+
+    Selected via LLM_PROVIDER env var: "claude"/"anthropic" -> ClaudeClient,
+    anything else (including unset) -> GeminiClient (default, unchanged
+    behaviour for existing deployments).
+    """
+    provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
+    if provider in ("claude", "anthropic"):
+        return ClaudeClient()
+    return GeminiClient()
