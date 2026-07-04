@@ -21,6 +21,7 @@ backend/.env
 frontend/.env
 backend/.venv
 __pycache__/
+.pytest_cache/
 tsconfig.tsbuildinfo
 
 .serverless/
