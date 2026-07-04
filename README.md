@@ -153,6 +153,13 @@ Run locally:
 uvicorn main:app --reload --port 8000
 ```
 
+Run tests (no API keys or Redis needed — `core/` is pure analysis, no I/O):
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ### Installing pnpm
 
 If `pnpm -v` fails, install it via Node's Corepack (bundled with Node 16.13+) or npm:
