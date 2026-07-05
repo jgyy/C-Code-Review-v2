@@ -14,6 +14,29 @@
 - Review posted automatically as a GitHub PR comment with a risk badge, per-function breakdown, memory safety issues, and actionable recommendations.
 - Results displayed in a dashboard with job history and cache statistics.
 
+### Business Impact
+
+Code review is one of the biggest hidden costs in a software team's week — senior engineers routinely spend hours per sprint reading diffs line-by-line, and a missed memory bug or logic regression in C can turn into a multi-day production incident. This tool moves that cost earlier and makes it cheaper:
+
+- **Review time back in engineers' hands** — structural risk scoring and a pre-written, function-level review draft mean a reviewer starts from "here's what changed and why it matters" instead of a blank diff.
+- **Fewer regressions reaching production** — memory-imbalance, call-graph, and complexity signals surface risks that are easy to miss in a fast visual scan of a large diff.
+- **Consistent review quality regardless of who's on call** — every PR gets the same structural checks applied, so review quality doesn't depend on which reviewer happened to be available that day.
+- **Review effort that scales with actual risk** — trivial changes (renames, formatting) are fast-pathed with no extra reviewer overhead, while large or high-risk diffs get deeper analysis, so the team's attention goes where it matters.
+
+```mermaid
+flowchart LR
+    subgraph Before["Before: manual review"]
+        A1["PR opened"] --> A2["Reviewer reads full diff line-by-line"]
+        A2 --> A3["Reviewer manually traces call sites and memory ops"]
+        A3 --> A4["Review comment written from scratch"]
+    end
+    subgraph After["After: structural triage"]
+        B1["PR opened"] --> B2["AST diff + risk score computed automatically"]
+        B2 --> B3["Reviewer opens PR comment with risk badge and findings already drafted"]
+        B3 --> B4["Reviewer spends time judging, not searching"]
+    end
+```
+
 ---
 
 ## Demo
