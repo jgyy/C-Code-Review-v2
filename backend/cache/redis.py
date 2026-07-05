@@ -114,7 +114,7 @@ async def get_cached_ast(sha: str, filepath: str) -> Optional[dict]:
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
-        print(f"Redis get error: {e}")
+        logger.error(f"Redis get error: {e}")
     return None
 
 
@@ -132,7 +132,7 @@ async def set_cached_ast(sha: str, filepath: str, ast_data: dict) -> bool:
         await rc.set(key, json.dumps(ast_data), ex=AST_CACHE_TTL)
         return True
     except Exception as e:
-        print(f"Redis set error: {e}")
+        logger.error(f"Redis set error: {e}")
     return False
 
 
@@ -163,7 +163,7 @@ async def enqueue_job(job_id: str, job_data: dict) -> bool:
         logger.info("Added to redis queue successfully")
         return True
     except Exception as e:
-        print(f"Redis enqueue error: {e}")
+        logger.error(f"Redis enqueue error: {e}")
     return False
 
 
@@ -188,7 +188,7 @@ async def dequeue_job() -> Optional[tuple[str, dict]]:
             data = json.loads(job_data) if isinstance(job_data, str) else job_data
             return (job_id, data)
     except Exception as e:
-        print(f"Redis dequeue error: {e}")
+        logger.error(f"Redis dequeue error: {e}")
     return None
 
 
@@ -232,7 +232,7 @@ async def update_job_status(
 
         return True
     except Exception as e:
-        print(f"Redis update error: {e}")
+        logger.error(f"Redis update error: {e}")
     return False
 
 
@@ -257,7 +257,7 @@ async def get_job_status(job_id: str) -> Optional[dict]:
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
-        print(f"Redis get error: {e}")
+        logger.error(f"Redis get error: {e}")
     return None
 
 
@@ -272,7 +272,7 @@ async def get_job_result(job_id: str) -> Optional[dict]:
         if data:
             return json.loads(data) if isinstance(data, str) else data
     except Exception as e:
-        print(f"Redis get error: {e}")
+        logger.error(f"Redis get error: {e}")
     return None
 
 
@@ -318,7 +318,7 @@ async def list_jobs(limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
 
         return (paginated, total)
     except Exception as e:
-        print(f"Redis list_jobs error: {e}")
+        logger.error(f"Redis list_jobs error: {e}")
         return ([], 0)
 
 

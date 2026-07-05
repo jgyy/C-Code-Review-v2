@@ -14,6 +14,7 @@ for non-blocking operation in FastAPI.
 from __future__ import annotations
 import os
 import asyncio
+import logging
 from typing import Optional
 from functools import cached_property
 
@@ -23,6 +24,8 @@ from github.Repository import Repository
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class GitHubClient:
     """
@@ -109,7 +112,7 @@ class GitHubClient:
                     },
                 }
             except Exception as e:
-                print(f"Error fetching PR info: {e}")
+                logger.error(f"Error fetching PR info: {e}")
                 return None
         
         return await asyncio.to_thread(_sync)
@@ -152,7 +155,7 @@ class GitHubClient:
                     for f in files
                 ]
             except Exception as e:
-                print(f"Error fetching PR files: {e}")
+                logger.error(f"Error fetching PR files: {e}")
                 return []
         
         return await asyncio.to_thread(_sync)
@@ -208,7 +211,7 @@ class GitHubClient:
                 pr.create_issue_comment(body)
                 return True
             except Exception as e:
-                print(f"Error posting comment: {e}")
+                logger.error(f"Error posting comment: {e}")
                 return False
         
         return await asyncio.to_thread(_sync)
@@ -256,7 +259,7 @@ class GitHubClient:
                 )
                 return True
             except Exception as e:
-                print(f"Error posting review: {e}")
+                logger.error(f"Error posting review: {e}")
                 return False
         
         return await asyncio.to_thread(_sync)
@@ -297,7 +300,7 @@ class GitHubClient:
                 check_run = repo_obj.create_check_run(**kwargs)
                 return check_run.id
             except Exception as e:
-                print(f"Error creating check run: {e}")
+                logger.error(f"Error creating check run: {e}")
                 return None
         
         return await asyncio.to_thread(_sync)
