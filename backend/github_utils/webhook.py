@@ -79,10 +79,12 @@ async def github_webhook(
     # Read raw body for signature verification
     body = await request.body()
     
-    # Verify signature if secret is configured
+    # Verify signature if secret is configured. Once a secret is set, a
+    # missing signature header must be rejected too — otherwise an attacker
+    # can bypass verification entirely by omitting the header.
     webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET")
-    if webhook_secret and x_hub_signature_256:
-        if not verify_signature(body, x_hub_signature_256, webhook_secret):
+    if webhook_secret:
+        if not x_hub_signature_256 or not verify_signature(body, x_hub_signature_256, webhook_secret):
             raise HTTPException(status_code=401, detail="Invalid signature")
     
     # Parse payload
