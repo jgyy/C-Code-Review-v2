@@ -76,8 +76,8 @@ export default function DashboardPage() {
       {/* Quick Analyze is the primary action on the dashboard, so it gets
           the centered, wider slot; Recent Jobs moves below it. */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <RecentJobs jobs={jobs} />
         <QuickAnalyze />
+        <RecentJobs jobs={jobs} />
       </div>
 
     </div>

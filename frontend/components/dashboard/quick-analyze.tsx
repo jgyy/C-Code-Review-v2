@@ -197,7 +197,7 @@ export function QuickAnalyze() {
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Browse PRs
+          Search Open PRs
         </button>
         <button
           type="button"
@@ -208,7 +208,7 @@ export function QuickAnalyze() {
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Fields
+          Manual
         </button>
         <button
           type="button"
