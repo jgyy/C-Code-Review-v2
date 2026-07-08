@@ -429,7 +429,7 @@ class BaseLLMClient:
             return pr_analysis
 
         except Exception as e:
-            logger.exception("Gemini analysis failed after retries")
+            logger.exception(f"Gemini analysis failed after retries: {e}")
             return self._fallback_analysis(pr_evidence, triage_result, str(e))
 
     # Keep the old method names as thin wrappers so webhook.py / pipeline.py

@@ -117,6 +117,50 @@ class GitHubClient:
         
         return await asyncio.to_thread(_sync)
     
+    async def list_open_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        installation_id: Optional[int] = None,
+        limit: int = 30,
+    ) -> Optional[list[dict]]:
+        """
+        List open pull requests for a repo, newest first.
+
+        Returns a list of lightweight dicts (not full PR objects) so the
+        dashboard's PR picker can render number/title/author/avatar without
+        pulling diffs or file lists. Returns None if the repo/owner can't be
+        resolved (e.g. typo, private repo without access) so the caller can
+        tell "no open PRs" apart from "couldn't reach that repo".
+        """
+        def _sync():
+            gh = self._get_github(installation_id)
+            try:
+                repo_obj = gh.get_repo(f"{owner}/{repo}")
+                pulls = repo_obj.get_pulls(
+                    state="open", sort="created", direction="desc"
+                )
+                results = []
+                for pr in pulls[:limit]:
+                    results.append({
+                        "number": pr.number,
+                        "title": pr.title,
+                        "author": pr.user.login,
+                        "author_avatar_url": pr.user.avatar_url,
+                        "head_ref": pr.head.ref,
+                        "base_ref": pr.base.ref,
+                        "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                        "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
+                        "html_url": pr.html_url,
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Error listing open PRs for {owner}/{repo}: {e}")
+                return None
+
+        return await asyncio.to_thread(_sync)
+
+    
     async def get_pr_files(
         self,
         owner: str,

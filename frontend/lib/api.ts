@@ -100,6 +100,25 @@ export interface AnalysisResult {
   mermaid_diagram?: string;
 }
 
+export interface OpenPullRequest {
+  number: number;
+  title: string;
+  author: string;
+  author_avatar_url?: string;
+  head_ref?: string;
+  base_ref?: string;
+  created_at?: string;
+  updated_at?: string;
+  html_url?: string;
+}
+ 
+export interface OpenPullRequestsResponse {
+  owner: string;
+  repo: string;
+  pull_requests: OpenPullRequest[];
+}
+
+
 export interface CacheStats {
   status: string;
   total_keys?: number;

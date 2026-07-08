@@ -145,6 +145,25 @@ class AnalysisResultResponse(BaseModel):
     # None if the LLM didn't produce one or it failed validation/repair.
     mermaid_diagram: Optional[str] = None
 
+class OpenPullRequestSummary(BaseModel):
+    """Summary of one open PR, used to populate the PR picker."""
+    number: int
+    title: str
+    author: str
+    author_avatar_url: Optional[str] = None
+    head_ref: Optional[str] = None
+    base_ref: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    html_url: Optional[str] = None
+ 
+ 
+class OpenPullRequestsResponse(BaseModel):
+    """Response for listing a repo's open pull requests."""
+    owner: str
+    repo: str
+    pull_requests: list[OpenPullRequestSummary] = Field(default_factory=list)
+
 
 class CacheStatsResponse(BaseModel):
     """Cache statistics."""

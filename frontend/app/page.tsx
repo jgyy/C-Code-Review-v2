@@ -73,10 +73,13 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <StatsCards stats={stats} />
 
+      {/* Quick Analyze is the primary action on the dashboard, so it gets
+          the centered, wider slot; Recent Jobs moves below it. */}
       <div className="grid gap-6 lg:grid-cols-2">
         <RecentJobs jobs={jobs} />
         <QuickAnalyze />
       </div>
+
     </div>
   );
 }

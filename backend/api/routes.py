@@ -26,7 +26,10 @@ from api.schemas import (
     CacheStatsResponse,
     JobListResponse,
     JobStatus,
+    OpenPullRequestSummary,
+    OpenPullRequestsResponse
 )
+from github_utils.client import GitHubClient
 from cache.redis import (
     enqueue_job,
     get_job_status,
@@ -37,6 +40,8 @@ from cache.redis import (
 )
 import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Constructed once at module level - boto3 clients are thread-safe and cheap to reuse.
 # The function name follows Serverless Framework's naming convention:
@@ -56,9 +61,45 @@ _lambda_client = boto3.client(
 # instead, as a plain asyncio task on the API server's own event loop.
 _LOCAL_WORKER = os.environ.get("WORKER_MODE", "lambda").strip().lower() == "local"
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["api"])
+
+# Reused across requests — same rationale as the boto3 client above: cheap to
+# construct, and PyGithub instances don't hold per-request state we need to
+# isolate. Auth (PAT vs GitHub App installation token) is resolved per-call.
+_github_client = GitHubClient()
+
+@router.get("/repos/{owner}/{repo}/pulls", response_model=OpenPullRequestsResponse)
+async def list_open_pull_requests(
+    owner: str,
+    repo: str,
+    installation_id: Optional[int] = None,
+):
+    """
+    List open pull requests for a repo, for the dashboard's PR picker.
+ 
+    Lets the frontend show a searchable list (by number, title, or author)
+    once the user enters an owner/repo, instead of requiring them to already
+    know the PR number.
+    """
+    pulls = await _github_client.list_open_pull_requests(
+        owner=owner,
+        repo=repo,
+        installation_id=installation_id,
+    )
+ 
+    if pulls is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Couldn't fetch open pull requests for {owner}/{repo}. "
+                    "Check the owner/repo name and that the repo is accessible.",
+        )
+ 
+    return OpenPullRequestsResponse(
+        owner=owner,
+        repo=repo,
+        pull_requests=[OpenPullRequestSummary(**pr) for pr in pulls],
+    )
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
