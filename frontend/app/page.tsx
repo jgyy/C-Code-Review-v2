@@ -1,14 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import { StatsCards } from "@/components/dashboard/stats-cards";
 import { RecentJobs } from "@/components/dashboard/recent-jobs";
 import { QuickAnalyze } from "@/components/dashboard/quick-analyze";
+import {
+  RecentRepositories,
+  type RecentRepository,
+} from "@/components/dashboard/recent-repositories";
 import { fetcher } from "@/lib/api";
 import type { CacheStats, JobStatus, AnalysisResult } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
 export default function DashboardPage() {
+  const [selectedRepository, setSelectedRepository] =
+    useState<RecentRepository | null>(null);
+
   const { data: cacheStats, isLoading: cacheLoading } = useSWR<CacheStats>(
     `/api/cache/stats`,
     fetcher,
@@ -22,6 +30,28 @@ export default function DashboardPage() {
   );
 
   const jobs: (JobStatus & Partial<AnalysisResult>)[] = jobsData?.jobs ?? [];
+  const jobsByCreatedAt = [...jobs].sort(
+    (a, b) =>
+      new Date(b.created_at ?? 0).getTime() -
+      new Date(a.created_at ?? 0).getTime()
+  );
+  const recentRepositories = Array.from(
+    jobsByCreatedAt.reduce((repositories, job) => {
+      if (!job.owner || !job.repo) return repositories;
+
+      const key = `${job.owner}/${job.repo}`;
+      if (!repositories.has(key)) {
+        repositories.set(key, {
+          owner: job.owner,
+          repo: job.repo,
+          lastPrNumber: job.pr_number,
+          lastAnalyzedAt: job.created_at,
+        });
+      }
+
+      return repositories;
+    }, new Map<string, RecentRepository>()).values()
+  ).slice(0, 5);
 
   // Derive avg analysis time from jobs that have both timestamps
   const completedWithTimes = jobs.filter(
@@ -74,8 +104,14 @@ export default function DashboardPage() {
       <StatsCards stats={stats} />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <RecentJobs jobs={jobs} />
-        <QuickAnalyze />
+        <div className="space-y-6">
+          <RecentJobs jobs={jobs} />
+          <RecentRepositories
+            repositories={recentRepositories}
+            onSelect={(repository) => setSelectedRepository({ ...repository })}
+          />
+        </div>
+        <QuickAnalyze selectedRepository={selectedRepository} />
       </div>
     </div>
   );

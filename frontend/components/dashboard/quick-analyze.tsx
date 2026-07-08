@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Loader2, Play } from "lucide-react";
@@ -15,7 +15,14 @@ function parsePrUrl(url: string) {
   return { owner, repo, pr_number: prNumber };
 }
 
-export function QuickAnalyze() {
+interface QuickAnalyzeProps {
+  selectedRepository?: {
+    owner: string;
+    repo: string;
+  } | null;
+}
+
+export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +35,18 @@ export function QuickAnalyze() {
   });
   const [prUrl, setPrUrl] = useState("");
   const [postComment, setPostComment] = useState(true);
+
+  useEffect(() => {
+    if (!selectedRepository) return;
+
+    setMode("fields");
+    setFormData({
+      owner: selectedRepository.owner,
+      repo: selectedRepository.repo,
+      pr_number: "",
+    });
+    setPrUrl("");
+  }, [selectedRepository]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
