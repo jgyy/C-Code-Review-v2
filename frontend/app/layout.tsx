@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
-import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { StatusBar } from "@/components/layout/status-bar";
 import "./globals.css";
 import { SessionProvider } from "next-auth/react"
 import { Providers } from "@/components/providers"
@@ -30,15 +30,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="font-sans">
 		<Providers>
-          <div className="flex h-screen overflow-hidden">
-            <Sidebar />
-            <div className="flex flex-1 flex-col overflow-hidden">
-              <Header />
-              <main className="flex-1 overflow-auto bg-background p-6">
-                {children}
-              </main>
-            </div>
+          <div className="flex h-screen flex-col overflow-hidden">
+            <Header />
+            <main className="flex-1 overflow-auto bg-background p-6">
+              {children}
+            </main>
           </div>
+          <StatusBar />
 		</Providers>
       </body>
     </html>

@@ -15,7 +15,7 @@ import os
 import uuid
 
 import boto3
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 
 from api.schemas import (
     AnalyzeRequest,
@@ -27,7 +27,11 @@ from api.schemas import (
     JobListResponse,
     JobStatus,
     OpenPullRequestSummary,
-    OpenPullRequestsResponse
+    OpenPullRequestsResponse,
+    RepoSummary,
+    RepoListResponse,
+    PullRequestCard,
+    PullRequestCardsResponse,
 )
 from github_utils.client import GitHubClient
 from cache.redis import (
@@ -68,6 +72,69 @@ router = APIRouter(tags=["api"])
 # construct, and PyGithub instances don't hold per-request state we need to
 # isolate. Auth (PAT vs GitHub App installation token) is resolved per-call.
 _github_client = GitHubClient()
+
+
+async def require_github_token(authorization: Optional[str] = Header(None)) -> str:
+    """
+    Extract the caller's GitHub OAuth access token from the Authorization
+    header. The frontend's NextAuth session already carries this token on
+    every request (see frontend/lib/api.ts) — this just enforces it's
+    present for endpoints that act on behalf of the logged-in user.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing GitHub access token. Sign in with GitHub first.",
+        )
+    return authorization.split(" ", 1)[1]
+ 
+ 
+@router.get("/me/repos", response_model=RepoListResponse)
+async def list_my_repos(authorization: Optional[str] = Header(None)):
+    """Repos the logged-in user can access, for the 'recent repositories' section."""
+    token = await require_github_token(authorization)
+    repos = await _github_client.list_user_repos(token)
+    return RepoListResponse(repos=[RepoSummary(**r) for r in repos])
+ 
+ 
+@router.get("/me/pulls/review-requested", response_model=PullRequestCardsResponse)
+async def list_review_requested_pulls(authorization: Optional[str] = Header(None)):
+    """Open PRs where the logged-in user is a requested reviewer."""
+    token = await require_github_token(authorization)
+    # GitHub search API resolves review-requested:@me relative to the token owner.
+    pulls = await _github_client.search_pull_requests(
+        token, "is:pr is:open review-requested:@me"
+    )
+    return PullRequestCardsResponse(pull_requests=[PullRequestCard(**p) for p in pulls])
+ 
+ 
+@router.get("/me/pulls/authored", response_model=PullRequestCardsResponse)
+async def list_authored_pulls(authorization: Optional[str] = Header(None)):
+    """The logged-in user's own open PRs."""
+    token = await require_github_token(authorization)
+    pulls = await _github_client.search_pull_requests(
+        token, "is:pr is:open author:@me"
+    )
+    return PullRequestCardsResponse(pull_requests=[PullRequestCard(**p) for p in pulls])
+ 
+ 
+@router.get("/me/pulls/recent-team", response_model=PullRequestCardsResponse)
+async def list_recent_team_pulls(authorization: Optional[str] = Header(None)):
+    """
+    Recently updated open PRs across the user's orgs, excluding the
+    review-requested and authored sections above. Returns an empty list
+    if the user doesn't belong to any orgs (frontend hides the section).
+    """
+    token = await require_github_token(authorization)
+    orgs = await _github_client.list_user_orgs(token)
+    if not orgs:
+        return PullRequestCardsResponse(pull_requests=[])
+ 
+    org_filter = " ".join(f"org:{org}" for org in orgs[:5])
+    query = f"is:pr is:open {org_filter} -review-requested:@me -author:@me"
+    pulls = await _github_client.search_pull_requests(token, query)
+    return PullRequestCardsResponse(pull_requests=[PullRequestCard(**p) for p in pulls])
+
 
 @router.get("/repos/{owner}/{repo}/pulls", response_model=OpenPullRequestsResponse)
 async def list_open_pull_requests(

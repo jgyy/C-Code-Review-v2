@@ -111,13 +111,42 @@ export interface OpenPullRequest {
   updated_at?: string;
   html_url?: string;
 }
- 
+
 export interface OpenPullRequestsResponse {
   owner: string;
   repo: string;
   pull_requests: OpenPullRequest[];
 }
 
+export interface RepoSummary {
+  owner: string;
+  name: string;
+  full_name: string;
+  avatar_url?: string;
+  private: boolean;
+  description?: string;
+  pushed_at?: string;
+}
+
+export interface RepoListResponse {
+  repos: RepoSummary[];
+}
+
+export interface PullRequestCard {
+  number: number;
+  title: string;
+  author: string;
+  author_avatar_url?: string;
+  repo_full_name: string;
+  draft: boolean;
+  labels: string[];
+  updated_at?: string;
+  html_url?: string;
+}
+
+export interface PullRequestCardsResponse {
+  pull_requests: PullRequestCard[];
+}
 
 export interface CacheStats {
   status: string;
@@ -182,6 +211,13 @@ export const api = {
   health: () => request<HealthStatus>("/health"),
   listJobs: (limit = 50, offset = 0) =>
     request<{ jobs: JobStatus[]; total: number }>(`/api/jobs?limit=${limit}&offset=${offset}`),
+  listOpenPulls: (owner: string, repo: string) =>
+    request<OpenPullRequestsResponse>(
+      `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`
+    ),
+  listMyRepos: () => request<RepoListResponse>(`/api/me/repos`),
+  listMyPulls: (section: "review-requested" | "authored" | "recent-team") =>
+    request<PullRequestCardsResponse>(`/api/me/pulls/${section}`),
 }
 
 export const fetcher = <T>(endpoint: string): Promise<T> => request<T>(endpoint)

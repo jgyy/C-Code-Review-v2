@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { OpenPullRequestsResponse } from "@/lib/api";
@@ -65,6 +65,7 @@ function PrAvatar({ login, url }: { login: string; url?: string }) {
 
 export function QuickAnalyze() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<"browse" | "fields" | "url">("browse");
@@ -76,6 +77,26 @@ export function QuickAnalyze() {
   });
   const [prUrl, setPrUrl] = useState("");
   const [postComment, setPostComment] = useState(true);
+
+  // Prefill from links like /analyze?owner=x&repo=y (from "recent repos" or
+  // the dashboard header's smart search) or ...&pr_number=123&autostart=1
+  // (when the header already parsed a full PR reference).
+  useEffect(() => {
+    const owner = searchParams.get("owner");
+    const repo = searchParams.get("repo");
+    const prNumber = searchParams.get("pr_number");
+
+    if (owner && repo) {
+      setFormData((prev) => ({
+        ...prev,
+        owner,
+        repo,
+        pr_number: prNumber ?? prev.pr_number,
+      }));
+      setMode(prNumber ? "fields" : "browse");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Browse PRs mode (new) --------------------------------------------
   const [prSearch, setPrSearch] = useState("");
@@ -132,9 +153,25 @@ export function QuickAnalyze() {
 
   // --- Submit -------------------------------------------------------------
 
+  const startAnalysis = async (owner: string, repo: string, prNumber: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      const result = await api.analyze({
+        owner,
+        repo,
+        pr_number: parseInt(prNumber, 10),
+        post_comment: postComment,
+      });
+      router.push(`/jobs/${result.job_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start analysis");
+      setIsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
 
     let owner = formData.owner;
     let repo = formData.repo;
@@ -156,22 +193,22 @@ export function QuickAnalyze() {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const result = await api.analyze({
-        owner,
-        repo,
-        pr_number: parseInt(prNumber, 10),
-        post_comment: postComment,
-      });
-
-      router.push(`/jobs/${result.job_id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start analysis");
-    } finally {
-      setIsLoading(false);
-    }
+    startAnalysis(owner, repo, prNumber);
   };
+
+  // Auto-start when the dashboard's smart search already resolved a full
+  // owner/repo/pr_number reference (?autostart=1) — skips a redundant click.
+  useEffect(() => {
+    if (
+      searchParams.get("autostart") === "1" &&
+      formData.owner &&
+      formData.repo &&
+      formData.pr_number
+    ) {
+      startAnalysis(formData.owner, formData.repo, formData.pr_number);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.owner, formData.repo, formData.pr_number]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData((prev) => ({
@@ -184,7 +221,7 @@ export function QuickAnalyze() {
     <div className="rounded-lg border border-border bg-card p-6">
       <h2 className="text-lg font-semibold text-foreground">Quick Analyze</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Trigger analysis for a GitHub pull request
+        Search for a pull request using one of the below methods!
       </p>
 
       <div className="mt-4 inline-flex rounded-md border border-border bg-secondary p-1 text-sm">
@@ -197,7 +234,7 @@ export function QuickAnalyze() {
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Search Open PRs
+          Repository name
         </button>
         <button
           type="button"
@@ -208,7 +245,7 @@ export function QuickAnalyze() {
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Manual
+          PR number
         </button>
         <button
           type="button"
