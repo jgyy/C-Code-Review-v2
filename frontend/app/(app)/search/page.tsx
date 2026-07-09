@@ -7,7 +7,7 @@ import { QuickAnalyze } from "@/components/dashboard/quick-analyze";
 // prefill from links like /search?owner=x&repo=y or ?pr_number=123.
 export default function SearchPage() {
   return (
-    <div className="space-y-4">
+    <div className="mx-auto w-full max-w-6xl">
       <Suspense fallback={null}>
         <QuickAnalyze />
       </Suspense>
