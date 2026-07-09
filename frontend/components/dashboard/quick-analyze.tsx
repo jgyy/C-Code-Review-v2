@@ -218,13 +218,13 @@ export function QuickAnalyze() {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-6">
+    <div className="p-2">
       <h2 className="text-lg font-semibold text-foreground">Quick Analyze</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Search for a pull request using one of the below methods!
       </p>
 
-      <div className="mt-4 inline-flex rounded-md border border-border bg-secondary p-1 text-sm">
+      <div className="mt-4 inline-flex rounded-md text-sm">
         <button
           type="button"
           onClick={() => setMode("browse")}
@@ -487,7 +487,7 @@ export function QuickAnalyze() {
             type="checkbox"
             checked={postComment}
             onChange={(e) => setPostComment(e.target.checked)}
-            className="h-4 w-4 rounded border-border bg-secondary text-ring focus:ring-1 focus:ring-ring"
+            className="h-4 w-4 rounded border-border bg-secondary text-ring focus:ring-1 focus:ring-ring accent-primary"
           />
           Post review as a comment on the GitHub PR
         </label>

@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
-import "./globals.css";
-import { Providers } from "@/components/providers";
+import { Header } from "@/components/layout/header";
+import { StatusBar } from "@/components/layout/status-bar";
+import { SessionProvider } from "next-auth/react"
+import { Providers } from "@/components/providers"
 
 const inter = Inter({
   subsets: ["latin"],
@@ -22,16 +24,10 @@ export const viewport: Viewport = {
   themeColor: "#0a0a0a",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
-      <body className="min-h-screen font-sans bg-background">
-        <Providers>{children}</Providers>
-      </body>
-    </html>
-  );
+        <main className="min-h-screen overflow-auto bg-background">
+          {children}
+        </main>
+  )
 }

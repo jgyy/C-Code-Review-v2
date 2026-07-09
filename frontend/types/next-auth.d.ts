@@ -4,6 +4,7 @@ import "next-auth/jwt"
 declare module "next-auth" {
   interface Session {
     accessToken?: string
+    error?: string
     user: {
       githubId?: number
       login?: string
@@ -15,6 +16,9 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     accessToken?: string
+    refreshToken?: string
+    accessTokenExpires?: number
+    error?: string
     githubId?: number
     login?: string
     avatarUrl?: string

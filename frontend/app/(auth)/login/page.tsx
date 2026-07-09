@@ -9,8 +9,8 @@ function LoginContent() {
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-950">
-      <div className="w-full max-w-sm px-8 py-10 bg-gray-900 border border-gray-800 rounded-2xl shadow-xl flex flex-col items-center gap-6">
+    <main className="min-h-screen flex items-center justify-center bg-background">
+      <div className="w-full max-w-sm px-8 py-10 flex flex-col items-center gap-6">
         {/* Logo / wordmark */}
         <div className="flex flex-col items-center gap-1 mb-2">
           <span className="text-2xl font-bold tracking-tight text-white">

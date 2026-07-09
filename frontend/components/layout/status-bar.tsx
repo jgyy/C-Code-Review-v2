@@ -12,11 +12,11 @@ export function StatusBar() {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm backdrop-blur-md">
+    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm backdrop-blur-md hover:bg-secondary/50 ">
       <button
         onClick={handleRefresh}
         disabled={isRefreshing}
-        className="flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+        className="flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground hover:font-semibold disabled:opacity-50"
       >
         {isRefreshing ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
