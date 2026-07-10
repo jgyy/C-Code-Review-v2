@@ -46,7 +46,7 @@ export function PrSection({
       </div>
 
       {error && (
-        <EmptyState message="Couldn't load this section. Try refreshing." />
+        <EmptyState message="Nothing to see here right now. Try refreshing." />
       )}
 
       {isLoading && !error && (
