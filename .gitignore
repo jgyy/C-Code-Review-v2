@@ -18,9 +18,9 @@ node_modules
 .vercel
 
 **/.env
-**/.env.*
 **/.venv
 **/__pycache__/
+**/.pytest_cache/
 tsconfig.tsbuildinfo
 
 .serverless/

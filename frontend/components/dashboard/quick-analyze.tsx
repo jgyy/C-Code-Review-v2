@@ -325,8 +325,8 @@ export function QuickAnalyze() {
                   )}
 
                   {pullsError && !pullsLoading && (
-                    <p className="p-4 text-sm text-status-failed">
-                      Couldn&apos;t load pull requests for {formData.owner}/
+                    <p className="p-4 text-sm text-muted-foreground">
+                      No open pull requests found for {formData.owner}/
                       {formData.repo}. Check the owner and repo name.
                     </p>
                   )}

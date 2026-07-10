@@ -116,6 +116,7 @@ class AnalysisPipeline:
         
         try:
             # 1. Fetch PR info and changed files
+            logger.info("--- Stage 1: Fetch PR info and changed files ---")
             await set_job_stage(job_id, "fetching_pr")
             pr_info = await github_client.get_pr_info(repo_owner, repo_name, pr_number)
             logger.info(f"pr_info: {pr_info}")
@@ -125,7 +126,7 @@ class AnalysisPipeline:
                 return result
             
             changed_files = await github_client.get_pr_files(repo_owner, repo_name, pr_number)
-            # logger.info(f"changed_files: {changed_files}")
+            logger.info(f"changed_files: {changed_files}")
             # Filter to C/H files only
             c_files = [
                 f for f in changed_files
@@ -147,6 +148,7 @@ class AnalysisPipeline:
             result.files_analyzed = len(c_files)
 
             # 2. Fetch and parse file contents
+            logger.info("--- Stage 2: Fetch and parse file contents ---")
             await set_job_stage(job_id, "parsing_files")
             base_sha = pr_info["base"]["sha"]
             head_sha = pr_info["head"]["sha"]
@@ -167,10 +169,10 @@ class AnalysisPipeline:
                     before_ast = await self._get_or_parse_ast(
                         github_client, repo_owner, repo_name, base_sha, before_path, result
                     )
-                logger.info(f"before: {before_ast}")
+                logger.info(f"before_ast: {before_ast}")
                 # Get after AST (if file still exists)
                 after_ast = FileAST(source_hash="empty")
-                logger.info(f"after: {after_ast}")
+                logger.info(f"after_ast: {after_ast}")
                 if status != "removed":
                     logger.info(f"status not removed: {status}")
                     # For renames, the new file lives at filepath (the new name)
@@ -181,8 +183,8 @@ class AnalysisPipeline:
                 file_asts[filepath] = (before_ast, after_ast)
             
             # 3. Compute evidence
+            logger.info("--- Stage 3: Compute evidence ---")
             await set_job_stage(job_id, "computing_evidence")
-            logger.info("Compute evidence")
             file_evidences: list[FileEvidence] = []
             for filepath, (before, after) in file_asts.items():
                 evidence = compute_file_evidence(filepath, before, after)
@@ -192,11 +194,13 @@ class AnalysisPipeline:
             pr_evidence = compute_pr_evidence(file_evidences)
             logger.info(f"pr_evidence: {pr_evidence}")
             # 4. Triage
+            logger.info("--- Stage 4: Triage ---")
             await set_job_stage(job_id, "triage")
             triage_result = triage(pr_evidence)
             result.triage_result = triage_result
             logger.info(f"tri_res: {triage_result}")
             # 5. Route to LLM (or skip)
+            logger.info("--- Stage 5: Route to LLM ---")
             if triage_result.route == Route.SKIP:
                 logger.info(f"Route.SKIP")
                 result.success = True
@@ -223,13 +227,15 @@ class AnalysisPipeline:
                 )
             
             result.analysis = analysis
+            logger.info(f"LLM result: {result}")
+            logger.info(f"LLM analysis result: {result.analysis}")
             logger.info(f"result SUCCESS")
             result.success = True
             
         except Exception as e:
             result.error = str(e)
         
-        logger.info(f"final result: result")
+        # logger.info(f"final result: {result}")
         return result
     
     async def _get_or_parse_ast(

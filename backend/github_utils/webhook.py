@@ -179,6 +179,7 @@ async def process_pr_job(
         
         # Run pipeline
         pipeline = AnalysisPipeline(PipelineConfig())
+        logger.info(f"process_pr job_id: {job_id}")
         result = await pipeline.analyze_pr(
             github_client=github_client,
             llm_client=llm_client,
@@ -187,7 +188,7 @@ async def process_pr_job(
             pr_number=pr_number,
             job_id=job_id,
         )
-        
+        logger.info(f"pipe.analyze_pr result: {result}")
         if result.success:
             risk_level_str = (
                 result.analysis.risk_level.value
