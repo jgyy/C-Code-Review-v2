@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
-import { Loader2, Play } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import useSWR from "swr";
+import { api, fetcher } from "@/lib/api";
+import type { OpenPullRequestsResponse } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { Loader2, Play, Search, Check, GitPullRequest } from "lucide-react";
 
 const PR_URL_PATTERN =
   /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
@@ -15,18 +18,57 @@ function parsePrUrl(url: string) {
   return { owner, repo, pr_number: prNumber };
 }
 
-interface QuickAnalyzeProps {
-  selectedRepository?: {
-    owner: string;
-    repo: string;
-  } | null;
+// Small delay before firing the PR lookup so we don't fetch on every
+// keystroke while the user is still typing the owner/repo.
+const REPO_DEBOUNCE_MS = 400;
+
+function initials(login: string) {
+  return login.slice(0, 2).toUpperCase();
 }
 
-export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
+function timeAgo(iso?: string) {
+  if (!iso) return null;
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (days <= 0) return "today";
+  if (days === 1) return "1 day ago";
+  return `${days} days ago`;
+}
+
+function PrAvatar({ login, url }: { login: string; url?: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (!url || failed) {
+    return (
+      <div
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-medium text-foreground"
+        aria-hidden="true"
+      >
+        {initials(login)}
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`${url}${url.includes("?") ? "&" : "?"}s=64`}
+      alt=""
+      width={28}
+      height={28}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="h-7 w-7 shrink-0 rounded-full"
+    />
+  );
+}
+
+export function QuickAnalyze() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"fields" | "url">("fields");
+  const [mode, setMode] = useState<"browse" | "fields" | "url">("browse");
 
   const [formData, setFormData] = useState({
     owner: "",
@@ -36,21 +78,100 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
   const [prUrl, setPrUrl] = useState("");
   const [postComment, setPostComment] = useState(true);
 
+  // Prefill from links like /analyze?owner=x&repo=y (from "recent repos" or
+  // the dashboard header's smart search) or ...&pr_number=123&autostart=1
+  // (when the header already parsed a full PR reference).
   useEffect(() => {
-    if (!selectedRepository) return;
+    const owner = searchParams.get("owner");
+    const repo = searchParams.get("repo");
+    const prNumber = searchParams.get("pr_number");
 
-    setMode("fields");
-    setFormData({
-      owner: selectedRepository.owner,
-      repo: selectedRepository.repo,
-      pr_number: "",
+    if (owner && repo) {
+      setFormData((prev) => ({
+        ...prev,
+        owner,
+        repo,
+        pr_number: prNumber ?? prev.pr_number,
+      }));
+      setMode(prNumber ? "fields" : "browse");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- Browse PRs mode (new) --------------------------------------------
+  const [prSearch, setPrSearch] = useState("");
+  const [selectedPr, setSelectedPr] = useState<number | null>(null);
+  const [debouncedOwner, setDebouncedOwner] = useState("");
+  const [debouncedRepo, setDebouncedRepo] = useState("");
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedOwner(formData.owner.trim());
+      setDebouncedRepo(formData.repo.trim());
+    }, REPO_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [formData.owner, formData.repo]);
+
+  const shouldFetchPulls =
+    mode === "browse" && debouncedOwner.length > 0 && debouncedRepo.length > 0;
+
+  const {
+    data: pullsData,
+    error: pullsError,
+    isLoading: pullsLoading,
+  } = useSWR<OpenPullRequestsResponse>(
+    shouldFetchPulls
+      ? `/api/repos/${encodeURIComponent(debouncedOwner)}/${encodeURIComponent(debouncedRepo)}/pulls`
+      : null,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+
+  const filteredPulls = useMemo(() => {
+    const pulls = pullsData?.pull_requests ?? [];
+    const query = prSearch.trim().toLowerCase();
+    if (!query) return pulls;
+    return pulls.filter((pr) => {
+      return (
+        String(pr.number).includes(query) ||
+        pr.title.toLowerCase().includes(query) ||
+        pr.author.toLowerCase().includes(query)
+      );
     });
-    setPrUrl("");
-  }, [selectedRepository]);
+  }, [pullsData, prSearch]);
+
+  // Selection no longer belongs to the current repo's PR list (owner/repo
+  // changed) — clear it so we don't submit a stale PR number.
+  useEffect(() => {
+    setSelectedPr(null);
+  }, [debouncedOwner, debouncedRepo]);
+
+  const handleSelectPr = (prNumber: number) => {
+    setSelectedPr(prNumber);
+    setFormData((prev) => ({ ...prev, pr_number: String(prNumber) }));
+  };
+
+  // --- Submit -------------------------------------------------------------
+
+  const startAnalysis = async (owner: string, repo: string, prNumber: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      const result = await api.analyze({
+        owner,
+        repo,
+        pr_number: parseInt(prNumber, 10),
+        post_comment: postComment,
+      });
+      router.push(`/jobs/${result.job_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start analysis");
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
 
     let owner = formData.owner;
     let repo = formData.repo;
@@ -67,22 +188,27 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
       ({ owner, repo, pr_number: prNumber } = parsed);
     }
 
-    setIsLoading(true);
-    try {
-      const result = await api.analyze({
-        owner,
-        repo,
-        pr_number: parseInt(prNumber, 10),
-        post_comment: postComment,
-      });
-
-      router.push(`/jobs/${result.job_id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start analysis");
-    } finally {
-      setIsLoading(false);
+    if (mode === "browse" && !selectedPr) {
+      setError("Select an open pull request from the list below.");
+      return;
     }
+
+    startAnalysis(owner, repo, prNumber);
   };
+
+  // Auto-start when the dashboard's smart search already resolved a full
+  // owner/repo/pr_number reference (?autostart=1) — skips a redundant click.
+  useEffect(() => {
+    if (
+      searchParams.get("autostart") === "1" &&
+      formData.owner &&
+      formData.repo &&
+      formData.pr_number
+    ) {
+      startAnalysis(formData.owner, formData.repo, formData.pr_number);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.owner, formData.repo, formData.pr_number]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData((prev) => ({
@@ -92,13 +218,24 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-6">
+    <div className="p-2">
       <h2 className="text-lg font-semibold text-foreground">Quick Analyze</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Manually trigger analysis for a GitHub pull request
+        Search for a pull request using one of the below methods!
       </p>
 
-      <div className="mt-4 inline-flex rounded-md border border-border bg-secondary p-1 text-sm">
+      <div className="mt-4 inline-flex rounded-md text-sm">
+        <button
+          type="button"
+          onClick={() => setMode("browse")}
+          className={`rounded px-3 py-1 transition-colors ${
+            mode === "browse"
+              ? "bg-foreground text-background"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Repository name
+        </button>
         <button
           type="button"
           onClick={() => setMode("fields")}
@@ -108,7 +245,7 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Fields
+          PR number
         </button>
         <button
           type="button"
@@ -124,6 +261,144 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
       </div>
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+        {mode === "browse" && (
+          <div className="space-y-3">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label
+                  htmlFor="owner"
+                  className="block text-sm font-medium text-muted-foreground"
+                >
+                  Owner
+                </label>
+                <input
+                  type="text"
+                  id="owner"
+                  name="owner"
+                  value={formData.owner}
+                  onChange={handleChange}
+                  placeholder="octocat"
+                  required
+                  className="mt-1 block w-full rounded-md border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="repo"
+                  className="block text-sm font-medium text-muted-foreground"
+                >
+                  Repository
+                </label>
+                <input
+                  type="text"
+                  id="repo"
+                  name="repo"
+                  value={formData.repo}
+                  onChange={handleChange}
+                  placeholder="my-c-project"
+                  required
+                  className="mt-1 block w-full rounded-md border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            </div>
+
+            {shouldFetchPulls && (
+              <>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={prSearch}
+                    onChange={(e) => setPrSearch(e.target.value)}
+                    placeholder="Search open PRs by number, title, or author"
+                    className="mt-0 block w-full rounded-md border border-border bg-secondary py-2 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </div>
+
+                <div className="max-h-72 overflow-y-auto rounded-md border border-border">
+                  {pullsLoading && (
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading open pull requests...
+                    </div>
+                  )}
+
+                  {pullsError && !pullsLoading && (
+                    <p className="p-4 text-sm text-muted-foreground">
+                      No open pull requests found for {formData.owner}/
+                      {formData.repo}. Check the owner and repo name.
+                    </p>
+                  )}
+
+                  {!pullsLoading && !pullsError && filteredPulls.length === 0 && (
+                    <p className="p-4 text-sm text-muted-foreground">
+                      {pullsData?.pull_requests.length
+                        ? "No open PRs match that search."
+                        : "No open pull requests found for this repo."}
+                    </p>
+                  )}
+
+                  {!pullsLoading &&
+                    !pullsError &&
+                    filteredPulls.map((pr, idx) => {
+                      const isSelected = selectedPr === pr.number;
+                      return (
+                        <button
+                          type="button"
+                          key={pr.number}
+                          onClick={() => handleSelectPr(pr.number)}
+                          className={cn(
+                            "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors",
+                            idx !== filteredPulls.length - 1 &&
+                              "border-b border-border",
+                            isSelected ? "bg-primary/10" : "hover:bg-secondary"
+                          )}
+                        >
+                          <PrAvatar login={pr.author} url={pr.author_avatar_url} />
+                          <span
+                            className={cn(
+                              "shrink-0 font-medium",
+                              isSelected ? "text-primary" : "text-muted-foreground"
+                            )}
+                          >
+                            #{pr.number}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-foreground">
+                              {pr.title}
+                            </span>
+                            <span
+                              className={cn(
+                                "block truncate text-xs",
+                                isSelected ? "text-primary" : "text-muted-foreground"
+                              )}
+                            >
+                              {pr.author}
+                              {timeAgo(pr.created_at)
+                                ? ` · opened ${timeAgo(pr.created_at)}`
+                                : ""}
+                            </span>
+                          </span>
+                          {isSelected && (
+                            <Check className="h-4 w-4 shrink-0 text-primary" />
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+              </>
+            )}
+
+            {!shouldFetchPulls && (
+              <p className="flex items-center gap-2 rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                <GitPullRequest className="h-4 w-4" />
+                Enter an owner and repository to see its open pull requests.
+              </p>
+            )}
+          </div>
+        )}
+
         {mode === "fields" ? (
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
@@ -184,7 +459,9 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
               />
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {mode === "url" ? (
           <div>
             <label
               htmlFor="pr_url"
@@ -203,14 +480,14 @@ export function QuickAnalyze({ selectedRepository }: QuickAnalyzeProps) {
               className="mt-1 block w-full rounded-md border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
-        )}
+        ) : null}
 
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
             checked={postComment}
             onChange={(e) => setPostComment(e.target.checked)}
-            className="h-4 w-4 rounded border-border bg-secondary text-ring focus:ring-1 focus:ring-ring"
+            className="h-4 w-4 rounded border-border bg-secondary text-ring focus:ring-1 focus:ring-ring accent-primary"
           />
           Post review as a comment on the GitHub PR
         </label>

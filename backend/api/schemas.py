@@ -146,6 +146,57 @@ class AnalysisResultResponse(BaseModel):
     mermaid_diagram: Optional[str] = None
 
 
+class RepoSummary(BaseModel):
+    """One repo in the user's 'recent repositories' list."""
+    owner: str
+    name: str
+    full_name: str
+    avatar_url: Optional[str] = None
+    private: bool = False
+    description: Optional[str] = None
+    pushed_at: Optional[str] = None
+
+
+class RepoListResponse(BaseModel):
+    repos: list[RepoSummary] = Field(default_factory=list)
+
+
+class PullRequestCard(BaseModel):
+    """One PR card for the dashboard's review-requested/authored/team sections."""
+    number: int
+    title: str
+    author: str
+    author_avatar_url: Optional[str] = None
+    repo_full_name: str
+    draft: bool = False
+    labels: list[str] = Field(default_factory=list)
+    updated_at: Optional[str] = None
+    html_url: Optional[str] = None
+
+
+class PullRequestCardsResponse(BaseModel):
+    pull_requests: list[PullRequestCard] = Field(default_factory=list)
+
+
+class OpenPullRequestSummary(BaseModel):
+    """Summary of one open PR, used to populate the PR picker."""
+    number: int
+    title: str
+    author: str
+    author_avatar_url: Optional[str] = None
+    head_ref: Optional[str] = None
+    base_ref: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    html_url: Optional[str] = None
+
+class OpenPullRequestsResponse(BaseModel):
+    """Response for listing a repo's open pull requests."""
+    owner: str
+    repo: str
+    pull_requests: list[OpenPullRequestSummary] = Field(default_factory=list)
+
+
 class CacheStatsResponse(BaseModel):
     """Cache statistics."""
     status: str

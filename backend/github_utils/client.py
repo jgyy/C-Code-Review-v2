@@ -117,6 +117,128 @@ class GitHubClient:
         
         return await asyncio.to_thread(_sync)
     
+    # --- User-token methods (dashboard) --------------------------------
+    #
+    # These act on behalf of the logged-in user via their GitHub OAuth
+    # access token, rather than the app-level PAT/installation token used
+    # by the rest of this client. Each call builds its own short-lived
+    # Github instance since the token differs per request.
+
+    async def list_user_repos(self, user_token: str, limit: int = 30) -> list[dict]:
+        """
+        List repos the authenticated user can access (owned, collaborator,
+        or org member), most recently pushed first — used for the
+        dashboard's "recent repositories" section.
+        """
+        def _sync():
+            gh = Github(auth=Auth.Token(user_token))
+            user = gh.get_user()
+            repos = user.get_repos(
+                sort="pushed",
+                direction="desc",
+                affiliation="owner,collaborator,organization_member",
+            )
+            results = []
+            for repo in repos[:limit]:
+                results.append({
+                    "owner": repo.owner.login,
+                    "name": repo.name,
+                    "full_name": repo.full_name,
+                    "avatar_url": repo.owner.avatar_url,
+                    "private": repo.private,
+                    "description": repo.description,
+                    "pushed_at": repo.pushed_at.isoformat() if repo.pushed_at else None,
+                })
+            return results
+
+        return await asyncio.to_thread(_sync)
+
+    async def list_user_orgs(self, user_token: str) -> list[str]:
+        """List org logins the user belongs to, for the 'team PRs' query."""
+        def _sync():
+            gh = Github(auth=Auth.Token(user_token))
+            return [org.login for org in gh.get_user().get_orgs()]
+
+        return await asyncio.to_thread(_sync)
+
+    async def search_pull_requests(
+        self,
+        user_token: str,
+        query: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        Run a GitHub search-issues query scoped to pull requests and
+        return lightweight cards for the dashboard.
+
+        Using the Search API (rather than iterating every repo the user
+        can see) is what keeps this fast for users with hundreds of repos
+        or thousands of open PRs — one API call instead of N.
+        """
+        def _sync():
+            gh = Github(auth=Auth.Token(user_token))
+            issues = gh.search_issues(query=query, sort="updated", order="desc")
+            results = []
+            for issue in issues[:limit]:
+                raw = issue.raw_data
+                results.append({
+                    "number": issue.number,
+                    "title": issue.title,
+                    "author": issue.user.login,
+                    "author_avatar_url": issue.user.avatar_url,
+                    "repo_full_name": issue.repository.full_name,
+                    "draft": bool(raw.get("draft", False)),
+                    "labels": [label.name for label in issue.labels],
+                    "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
+                    "html_url": issue.html_url,
+                })
+            return results
+
+        return await asyncio.to_thread(_sync)
+
+    async def list_open_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        installation_id: Optional[int] = None,
+        limit: int = 30,
+    ) -> Optional[list[dict]]:
+        """
+        List open pull requests for a repo, newest first.
+
+        Returns a list of lightweight dicts (not full PR objects) so the
+        dashboard's PR picker can render number/title/author/avatar without
+        pulling diffs or file lists. Returns None if the repo/owner can't be
+        resolved (e.g. typo, private repo without access) so the caller can
+        tell "no open PRs" apart from "couldn't reach that repo".
+        """
+        def _sync():
+            gh = self._get_github(installation_id)
+            try:
+                repo_obj = gh.get_repo(f"{owner}/{repo}")
+                pulls = repo_obj.get_pulls(
+                    state="open", sort="created", direction="desc"
+                )
+                results = []
+                for pr in pulls[:limit]:
+                    results.append({
+                        "number": pr.number,
+                        "title": pr.title,
+                        "author": pr.user.login,
+                        "author_avatar_url": pr.user.avatar_url,
+                        "head_ref": pr.head.ref,
+                        "base_ref": pr.base.ref,
+                        "created_at": pr.created_at.isoformat() if pr.created_at else None,
+                        "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
+                        "html_url": pr.html_url,
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Error listing open PRs for {owner}/{repo}: {e}")
+                return None
+
+        return await asyncio.to_thread(_sync)
+
     async def get_pr_files(
         self,
         owner: str,
@@ -304,3 +426,4 @@ class GitHubClient:
                 return None
         
         return await asyncio.to_thread(_sync)
+    

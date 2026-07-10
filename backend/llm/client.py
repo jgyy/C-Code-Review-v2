@@ -358,7 +358,7 @@ class BaseLLMClient:
         )
         logger.info(
             f"Using model={model} for risk={triage_result.overall_risk_level.value}, "
-            f"llm_functions={len(triage_result.llm_selected_functions)}, "
+            f"llm_functions={triage_result.llm_selected_functions}, "
             f"static_only={triage_result.unanalysed_function_count}"
         )
 
@@ -400,11 +400,13 @@ class BaseLLMClient:
         user_prompt = build_fast_path_prompt(context)
 
         try:
+            logger.info(f"user_prompt: {user_prompt}")
             response = await self._call_gemini(
                 system_prompt=SYSTEM_PROMPT_FAST_PATH,
                 user_prompt=user_prompt,
                 model=model,
             )
+            logger.info(f"LLM response: {response}")
             pr_analysis = self._parse_pr_analysis(response, triage_result)
 
             # Diagram is generated as a SEPARATE call (see _generate_mermaid_diagram
@@ -429,7 +431,7 @@ class BaseLLMClient:
             return pr_analysis
 
         except Exception as e:
-            logger.exception("Gemini analysis failed after retries")
+            logger.exception(f"Gemini analysis failed after retries: {e}")
             return self._fallback_analysis(pr_evidence, triage_result, str(e))
 
     # Keep the old method names as thin wrappers so webhook.py / pipeline.py
@@ -643,6 +645,12 @@ class BaseLLMClient:
         MAX_SNIPPET_CHARS each.
         """
         # Build a quick lookup: (filepath, func_name) -> FunctionEvidence
+        logger.info(f"build context")
+        logger.info(f"build context | pr_evidence: {pr_evidence}")
+        logger.info(f"build context | triage_result: {triage_result}")
+        logger.info(f"build context | file_asts: {file_asts}")
+        logger.info(f"build context | selected_functions: {selected_functions}")
+
         evidence_lookup: dict[tuple[str, str], FunctionEvidence] = {
             (file_ev.filepath, func_ev.name): func_ev
             for file_ev in pr_evidence.files

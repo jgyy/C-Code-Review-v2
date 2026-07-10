@@ -48,7 +48,7 @@ export function JobList({ jobs }: JobListProps) {
         <div className="col-span-2">Status</div>
         <div className="col-span-2">Risk</div>
         <div className="col-span-2">Created</div>
-        <div className="col-span-2 text-right">Actions</div>
+        <div className="col-span-2 px-2">GitHub</div>
       </div>
 
       {/* Table Body */}
@@ -92,9 +92,14 @@ export function JobList({ jobs }: JobListProps) {
               </Link>
 
               {/* Status */}
-              <div className="col-span-2">
-                <JobStatusBadge status={job.status} size="sm" />
-              </div>
+              <Link
+                href={`/jobs/${job.job_id}`}
+                className="col-span-2 flex items-center gap-3 min-w-0"
+              >
+                <div className="col-span-2">
+                  <JobStatusBadge status={job.status} size="sm" />
+                </div>
+              </Link>
 
               {/* Risk */}
               <div className="col-span-2">
@@ -116,13 +121,7 @@ export function JobList({ jobs }: JobListProps) {
               </div>
 
               {/* Actions */}
-              <div className="col-span-2 flex justify-end gap-2">
-                <Link
-                  href={`/jobs/${job.job_id}`}
-                  className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                >
-                  View
-                </Link>
+              <div className="col-span-2 flex gap-2">
                 {hasRepoInfo && prNumber && (
                   <a
                     href={`https://github.com/${owner}/${repo}/pull/${prNumber}`}
@@ -131,7 +130,7 @@ export function JobList({ jobs }: JobListProps) {
                     className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
-                    PR
+                    Link
                   </a>
                 )}
               </div>

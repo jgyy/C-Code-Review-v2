@@ -25,9 +25,11 @@ from workers.pipeline import AnalysisPipeline, PipelineConfig
 from github_utils.client import GitHubClient
 from llm.client import get_llm_client
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["webhook"])
 
 
@@ -85,21 +87,26 @@ async def github_webhook(
     webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET")
     if webhook_secret:
         if not x_hub_signature_256 or not verify_signature(body, x_hub_signature_256, webhook_secret):
+            logger.error("Webhook signature verified failed")
             raise HTTPException(status_code=401, detail="Invalid signature")
     
     # Parse payload
     try:
+        logger.info("Webhook signature verified! Now parsing payload")
         payload = await request.json()
     except Exception:
+        logger.error("Invalid JSON payload received from GitHub webhook")
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
     
     # Only handle pull_request events
     if x_github_event != "pull_request":
+        logger.error(f"Ignoring event {x_github_event}. Only pull_request allowed!")
         return {"status": "ignored", "reason": f"Event type: {x_github_event}"}
     
     # Only handle specific actions
     action = payload.get("action")
     if action not in HANDLED_ACTIONS:
+        logger.error(f"Ignoring request as {action} is not part of allowed actions")
         return {"status": "ignored", "reason": f"Action: {action}"}
     
     # Extract PR info
@@ -111,6 +118,7 @@ async def github_webhook(
     repo_full_name = repo.get("full_name", "")
     installation_id = installation.get("id") if installation else None
     
+    logger.info(f"pr_num: {pr_number} | repo_name: {repo_full_name} | install_id: {installation_id}")
     if not pr_number or not repo_full_name:
         raise HTTPException(status_code=400, detail="Missing PR or repo info")
     
@@ -118,6 +126,7 @@ async def github_webhook(
     
     # Generate job ID
     job_id = f"pr-{owner}-{repo_name}-{pr_number}-{uuid.uuid4().hex[:8]}"
+    logger.info(f"job_id: {job_id}")
     
     # Queue the job
     job_data = {
@@ -133,6 +142,7 @@ async def github_webhook(
     await enqueue_job(job_id, job_data)
     
     # Process in background
+    logger.info("Adding task to background tasks")
     background_tasks.add_task(
         process_pr_job,
         job_id=job_id,
@@ -169,6 +179,7 @@ async def process_pr_job(
         
         # Run pipeline
         pipeline = AnalysisPipeline(PipelineConfig())
+        logger.info(f"process_pr job_id: {job_id}")
         result = await pipeline.analyze_pr(
             github_client=github_client,
             llm_client=llm_client,
@@ -177,7 +188,7 @@ async def process_pr_job(
             pr_number=pr_number,
             job_id=job_id,
         )
-        
+        logger.info(f"pipe.analyze_pr result: {result}")
         if result.success:
             risk_level_str = (
                 result.analysis.risk_level.value

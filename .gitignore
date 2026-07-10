@@ -17,11 +17,13 @@ node_modules
 .pnpm-store/
 .vercel
 
-backend/.env
-frontend/.env
-backend/.venv
-__pycache__/
-.pytest_cache/
+**/.env
+**/.venv
+**/__pycache__/
+**/.pytest_cache/
 tsconfig.tsbuildinfo
 
 .serverless/
+
+.agents/
+.codex/
