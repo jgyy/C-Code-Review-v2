@@ -42,15 +42,18 @@ flowchart LR
 ## Demo
 
 ### GitHub OAuth Login
-<img width="1501" height="778" alt="image" src="https://github.com/user-attachments/assets/ba89bdb9-90f7-4076-abea-338bb6573d2c" />
+<img width="1911" height="956" alt="image" src="https://github.com/user-attachments/assets/73f1918c-4a13-4e61-b1a2-e2fd650e7977" />
 
 <img width="1124" height="772" alt="image" src="https://github.com/user-attachments/assets/0d5941e0-522f-4626-bd2b-e009194b91f5" />
 
 ### Dashboard
-<img width="1494" height="774" alt="image" src="https://github.com/user-attachments/assets/f7aa2d35-c835-403f-b1c9-f8a21641a9f3" />
+<img width="1911" height="956" alt="image" src="https://github.com/user-attachments/assets/f3c792c8-692c-40d9-9ed6-4c426f342d43" />
+
+### Search
+<img width="1911" height="956" alt="image" src="https://github.com/user-attachments/assets/07fd33ca-9d3d-47c2-b89a-9379b42ea9ad" />
 
 ### PR Analysis
-<img width="1655" height="792" alt="Screenshot 2026-06-14 at 4 33 07 PM" src="https://github.com/user-attachments/assets/e2522eef-4dc6-459c-900c-d787df3e3a8d" />
+<img width="1911" height="956" alt="image" src="https://github.com/user-attachments/assets/2df2b07a-8479-4bc6-911c-3395dd248c3d" />
 
 
 ### User Flow
