@@ -140,19 +140,21 @@ async def list_recent_team_pulls(authorization: Optional[str] = Header(None)):
 async def list_open_pull_requests(
     owner: str,
     repo: str,
-    installation_id: Optional[int] = None,
+    authorization: Optional[str] = Header(None),
 ):
     """
     List open pull requests for a repo, for the dashboard's PR picker.
- 
+
     Lets the frontend show a searchable list (by number, title, or author)
     once the user enters an owner/repo, instead of requiring them to already
-    know the PR number.
+    know the PR number. Uses the caller's own GitHub token so a user can
+    only ever see PRs for repos they can actually access on GitHub.
     """
+    token = await require_github_token(authorization)
     pulls = await _github_client.list_open_pull_requests(
         owner=owner,
         repo=repo,
-        installation_id=installation_id,
+        user_token=token,
     )
  
     if pulls is None:
@@ -319,7 +321,6 @@ async def get_analysis_result(job_id: str):
     """
     # First check job status
     job_data = await get_job_status(job_id)
-    logger.info(f"job: {job_data}")    
     if not job_data:
         raise HTTPException(
             status_code=404,
@@ -349,7 +350,6 @@ async def get_analysis_result(job_id: str):
     
     # Get the result
     result = await get_job_result(job_id)
-    logger.info(f"res {result} for id: {job_id}")
     if not result:
         return AnalysisResultResponse(
             job_id=job_id,
@@ -379,7 +379,6 @@ async def get_analysis_result(job_id: str):
             risk_signals=fa.get("risk_signals", []),
             suggestion=fa.get("suggestion"),
         ))
-    logger.info(f"j: {job_data}, o: {job_data.get('owner')}")
     return AnalysisResultResponse(
         job_id=job_id,
         owner=job_data.get("owner"),
