@@ -30,7 +30,7 @@ from core.heuristics import (
 from core.triage import triage, TriageResult, Route
 from workers.pool import parse_files_parallel
 from cache.redis import get_cached_ast, set_cached_ast, set_job_stage
-from github_utils.client import GitHubClient
+from github_utils.client import GitHubClient, GitHubFetchError
 from llm.client import BaseLLMClient
 from llm.schemas import PRAnalysis
 import logging
@@ -256,12 +256,31 @@ class AnalysisPipeline:
             return _dict_to_file_ast(cached)
         
         result.cache_misses += 1
-        
-        # Fetch content from GitHub
-        content = await github_client.get_file_content(repo_owner, repo_name, sha, filepath)
+
+        # Fetch content from GitHub.
+        #
+        # IMPORTANT: get_file_content raises GitHubFetchError for anything
+        # that isn't a confirmed "file doesn't exist at this SHA" (rate
+        # limits, transient network/5xx errors, auth issues). We must NOT
+        # treat that the same as "file is genuinely empty/absent" — doing so
+        # was the root cause of false "function deleted" reports: an empty
+        # FileAST diffed against a real before/after AST makes every function
+        # in the file look deleted (or added), even though it's untouched and
+        # we simply failed to fetch it. See FileAST.fetch_failed and
+        # core.heuristics.compute_file_evidence.
+        try:
+            content = await github_client.get_file_content(repo_owner, repo_name, sha, filepath)
+        except GitHubFetchError as e:
+            logger.error(
+                f"Failed to fetch {filepath}@{sha}, marking as fetch_failed "
+                f"(NOT treated as deleted/absent): {e}"
+            )
+            return FileAST(source_hash="fetch_error", has_parse_errors=True, fetch_failed=True)
+
         if content is None:
-            return FileAST(source_hash="error", has_parse_errors=True)
-        
+            # Confirmed absent at this SHA (e.g. newly added or removed file).
+            return FileAST(source_hash="empty")
+
         # Parse (this is sync, but fast)
         ast = extract_file_ast(content)
         

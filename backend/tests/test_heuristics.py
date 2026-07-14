@@ -5,11 +5,13 @@ evidence field being wrong here means the actual PR pipeline would score a
 diff incorrectly.
 """
 
-from core.parser import extract_file_ast
+from core.parser import extract_file_ast, FileAST
 from core.heuristics import (
     ChangeType,
     match_functions,
     compute_function_evidence,
+    compute_file_evidence,
+    compute_pr_evidence,
 )
 
 
@@ -126,3 +128,47 @@ def test_deleted_function_with_live_caller_is_flagged():
     )
 
     assert evidence.callers_lost == ["main"]
+
+
+def test_fetch_failure_does_not_report_false_deletions():
+    """
+    Regression test for issue #7: a failed content fetch for the after-side
+    of a file (rate limit / transient GitHub API error) must NOT be treated
+    as "these functions were deleted". Previously, a fetch failure produced
+    an empty FileAST that was diffed against the real before-AST exactly
+    like a genuine deletion, so every untouched function in the file was
+    misreported as deleted with dangling callers.
+    """
+    before = extract_file_ast(
+        "int clean_ast(void) { return 1; }\n"
+        "int clean_tok(void) { return clean_ast(); }\n"
+    )
+    # Simulates github_utils.client.GitHubFetchError being caught in the
+    # pipeline and converted into a fetch_failed placeholder, rather than an
+    # empty-but-legitimate FileAST.
+    after = FileAST(source_hash="fetch_error", has_parse_errors=True, fetch_failed=True)
+
+    evidence = compute_file_evidence("lexer.c", before, after)
+
+    assert evidence.fetch_failed is True
+    # No function evidence should be produced — in particular, no DELETED
+    # entries for clean_ast/clean_tok, which still exist and were untouched.
+    assert evidence.functions == []
+    assert evidence.functions_deleted == 0
+
+    pr_evidence = compute_pr_evidence([evidence])
+    assert pr_evidence.files_with_fetch_errors == ["lexer.c"]
+    assert pr_evidence.total_functions_changed == 0
+
+
+def test_fetch_failure_on_before_side_also_suppressed():
+    """Same guard, mirrored: a failed BEFORE fetch must not fabricate ADDED
+    functions for content that was actually untouched."""
+    before = FileAST(source_hash="fetch_error", has_parse_errors=True, fetch_failed=True)
+    after = extract_file_ast("int ft_crutch(void) { return 1; }\n")
+
+    evidence = compute_file_evidence("parser.c", before, after)
+
+    assert evidence.fetch_failed is True
+    assert evidence.functions == []
+    assert evidence.functions_added == 0
