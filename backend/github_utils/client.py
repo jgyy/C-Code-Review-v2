@@ -19,6 +19,7 @@ from typing import Optional
 from functools import cached_property
 
 from github import Github, GithubIntegration, Auth
+from github.GithubException import GithubException, UnknownObjectException
 from github.PullRequest import PullRequest
 from github.Repository import Repository
 from dotenv import load_dotenv
@@ -26,6 +27,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class GitHubFetchError(Exception):
+    """
+    Raised when file content could NOT be retrieved for a reason other than
+    "the file genuinely doesn't exist at this ref" (rate limit, transient
+    network/5xx error, auth hiccup, etc.).
+
+    This is distinct from returning None, which means "confirmed absent"
+    (a real 404 / UnknownObjectException) — e.g. the expected state for an
+    added file's before-content or a removed file's after-content. Callers
+    that fetch the OTHER side (the one that should exist) must not conflate
+    a fetch failure with "file/function was deleted", or every function in
+    that file will be misreported as deleted even though it's untouched.
+    """
+    pass
+
 
 class GitHubClient:
     """
@@ -296,24 +314,47 @@ class GitHubClient:
     ) -> Optional[str]:
         """
         Fetch file content at a specific commit SHA.
-        
-        Returns the file content as a string, or None if not found.
+
+        Returns the file content as a string, or None if the file is
+        CONFIRMED absent at this SHA (a real 404 / directory path — e.g. the
+        expected outcome when asking for the before-content of an added file
+        or the after-content of a removed file).
+
+        Raises GitHubFetchError for anything else (rate limit, transient
+        network/5xx error, auth failure, etc.) — those are NOT "file doesn't
+        exist" and must not be silently swallowed into None, because the
+        pipeline treats a None content fetch as "this side of the diff has no
+        functions", which would misreport every function in the file as
+        deleted/added rather than surfacing a fetch problem.
         """
         def _sync():
             gh = self._get_github(installation_id)
             try:
                 repo_obj = gh.get_repo(f"{owner}/{repo}")
                 content = repo_obj.get_contents(filepath, ref=sha)
-                
-                # get_contents can return a list for directories
+
+                # get_contents can return a list for directories — not a file,
+                # so "absent" is the correct interpretation here.
                 if isinstance(content, list):
                     return None
-                
+
                 return content.decoded_content.decode("utf-8", errors="replace")
-            except Exception as e:
-                # File might not exist at this SHA (e.g., newly added file)
+            except UnknownObjectException:
+                # Confirmed 404 — file genuinely doesn't exist at this SHA.
                 return None
-        
+            except GithubException as e:
+                # Rate limit (403/429), transient 5xx, etc. — NOT "not found".
+                logger.error(
+                    f"GitHub API error fetching {owner}/{repo}@{sha}:{filepath}: {e}"
+                )
+                raise GitHubFetchError(str(e)) from e
+            except Exception as e:
+                # Network errors, timeouts, etc. — also NOT "not found".
+                logger.error(
+                    f"Unexpected error fetching {owner}/{repo}@{sha}:{filepath}: {e}"
+                )
+                raise GitHubFetchError(str(e)) from e
+
         return await asyncio.to_thread(_sync)
     
     async def post_pr_comment(

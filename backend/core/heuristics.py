@@ -133,6 +133,14 @@ class FileEvidence:
     had_parse_errors_before: bool = False
     had_parse_errors_after: bool = False
 
+    # True when this file's before/after content could not be fetched (as
+    # opposed to genuinely not existing at that ref). When set, `functions`
+    # is deliberately left empty — we do NOT run deletion/call-graph analysis
+    # against a placeholder AST, since diffing "we don't know" against a real
+    # AST produces false ADDED/DELETED reports for every function in the
+    # file. See core.parser.FileAST.fetch_failed.
+    fetch_failed: bool = False
+
 
 @dataclass
 class PREvidence:
@@ -146,6 +154,11 @@ class PREvidence:
     total_memory_imbalance: int = 0
     has_orphaned_functions: bool = False
     has_signature_changes: bool = False
+
+    # Filepaths whose content could not be fetched (see FileEvidence.fetch_failed).
+    # Surfaced to triage/prompt so the LLM is told "not analysed", instead of
+    # silently having no evidence and being left to guess/hallucinate.
+    files_with_fetch_errors: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +476,20 @@ def compute_file_evidence(filepath: str, before: FileAST, after: FileAST) -> Fil
         total_functions_after=len(after.functions),
         had_parse_errors_before=before.has_parse_errors,
         had_parse_errors_after=after.has_parse_errors,
+        fetch_failed=before.fetch_failed or after.fetch_failed,
     )
-    
+
+    # GROUND-TRUTH GUARD: if either side of the diff couldn't actually be
+    # fetched, its FileAST is an empty placeholder, NOT proof that its
+    # functions don't exist. Diffing a placeholder against the real AST would
+    # make every function on the fetched side look ADDED (if before failed)
+    # or DELETED (if after failed) — this was the root cause of reports like
+    # "clean_ast/clean_tok/tok_delone were deleted" when they were simply
+    # untouched functions in a file whose content fetch failed. Bail out with
+    # zero function evidence for this file rather than fabricate a diff.
+    if before.fetch_failed or after.fetch_failed:
+        return evidence
+
     # Build call graphs for orphan detection and caller tracking.
     # before_callers: callee -> set of functions that called it in the before-AST.
     # after_callers:  callee -> set of functions that call it in the after-AST.
@@ -534,6 +559,8 @@ def compute_pr_evidence(file_evidences: list[FileEvidence]) -> PREvidence:
     )
     
     for file_ev in file_evidences:
+        if file_ev.fetch_failed:
+            pr.files_with_fetch_errors.append(file_ev.filepath)
         for func_ev in file_ev.functions:
             pr.total_functions_changed += 1
             pr.max_complexity_delta = max(pr.max_complexity_delta, abs(func_ev.complexity_delta))

@@ -764,6 +764,10 @@ class BaseLLMClient:
                 for name, depth, frac in top_features
             ],
             "omitted_functions_summary": omitted_summary,
+            # Files whose content couldn't be fetched — NOT analysed, NOT
+            # evidence of deletion. Told to the LLM explicitly so it can't
+            # infer "deleted" from their absence in the evidence above.
+            "files_with_fetch_errors": list(pr_evidence.files_with_fetch_errors),
         }
 
     def _get_snippet(

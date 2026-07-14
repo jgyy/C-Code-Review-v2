@@ -118,6 +118,19 @@ class FileAST:
     has_parse_errors: bool = False
     error_count: int = 0
 
+    # True when this FileAST is a placeholder because we could NOT retrieve the
+    # actual file content (network error, GitHub API failure, rate limit, etc.)
+    # — as opposed to the file genuinely not existing at that ref (added/removed).
+    #
+    # WHY THIS MATTERS: an empty `functions` dict is legitimately produced both
+    # by "this file doesn't exist at this SHA" (real add/delete) AND by "we
+    # failed to fetch it". Diffing the two indistinguishably was the root cause
+    # of false "function deleted" reports — every function in a file would look
+    # deleted if the after-content fetch merely failed. Callers MUST check this
+    # flag before treating an empty FileAST as ground truth for deletion/call-
+    # graph analysis. See core/heuristics.compute_file_evidence.
+    fetch_failed: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Recursive AST walker

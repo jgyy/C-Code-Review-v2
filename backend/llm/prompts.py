@@ -52,6 +52,15 @@ signature change), put it in `memory_safety_issues` ONCE and nowhere else — no
 `insights`, not in `recommendations`. A malloc/free imbalance in a trivial function is often a caller-owns-memory
 pattern, not a true leak; say so if the function is simple.
 
+### Ground truth only — never infer deletion from absence
+Only report a function as "deleted" or "removed" if the evidence for it explicitly has
+`change_type: deleted`. Never infer that a function was deleted merely because it isn't
+mentioned in the evidence or code snippets below — the evidence set is a curated subset
+(highest-risk functions only), not the full codebase, and functions omitted for space are
+NOT deleted. If a `files_with_fetch_errors` list is provided and non-empty, those files could
+not be analysed at all (a fetch failure, not evidence of change) — do not make any claim,
+positive or negative, about functions in those files.
+
 ### Deleted functions with live callers — highest priority signal
 If `callers_lost` is non-empty for a deleted function, this is a dangling-reference risk: existing code calls a
 function that no longer exists. Flag this as CRITICAL in the function's analysis and explain which callers are
@@ -165,7 +174,7 @@ USER_PROMPT_FAST_PATH = """## Pull Request Analysis
 
 {function_evidence_text}
 
-{top_feature_text}### Code Snippets (High-Risk Functions and Their New Callees)
+{fetch_errors_text}{top_feature_text}### Code Snippets (High-Risk Functions and Their New Callees)
 
 {code_snippets_text}
 
@@ -380,7 +389,19 @@ def build_fast_path_prompt(context: dict) -> str:
         top_feature_text = "\n".join(top_feat_lines) + "\n"
     else:
         top_feature_text = ""
-    
+
+    # Files that could not be fetched — explicitly flagged as "not analysed",
+    # never as evidence of deletion (see the "Ground truth only" system-prompt rule).
+    fetch_errors = context.get("files_with_fetch_errors", [])
+    if fetch_errors:
+        fetch_errors_text = (
+            "### Files NOT Analysed (content fetch failed — make no claims about them)\n\n"
+            + "\n".join(f"- `{f}`" for f in fetch_errors)
+            + "\n\n"
+        )
+    else:
+        fetch_errors_text = ""
+
     return USER_PROMPT_FAST_PATH.format(
         repo_name=context.get("repo_name", "unknown"),
         pr_number=context.get("pr_number", 0),
@@ -390,6 +411,7 @@ def build_fast_path_prompt(context: dict) -> str:
         function_evidence_text=function_evidence_text,
         code_snippets_text=code_snippets_text,
         top_feature_text=top_feature_text,
+        fetch_errors_text=fetch_errors_text,
     )
 
 
