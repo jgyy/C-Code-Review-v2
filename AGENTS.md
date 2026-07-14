@@ -1,6 +1,10 @@
-<!-- C-Code-Review, project-root CLAUDE.md. Keep this lean and repo-wide;
-     anchor guidance on stable paths and symbols, not counts that rot.
-     No em dashes, en dashes, or emojis. -->
+<!-- C-Code-Review, project-root AGENTS.md. AI-agent-agnostic entry point:
+     followed by Claude Code, Codex, Cursor, or any other coding agent.
+     Keep this lean and repo-wide; each subdirectory listed below has its
+     own local AGENTS.md with area-specific guidance, loaded on demand when
+     an agent works there — do not duplicate that detail here. Anchor
+     guidance on stable paths and symbols, not counts that rot. No em
+     dashes, en dashes, or emojis. -->
 
 # C-Code-Review
 
@@ -13,20 +17,18 @@ and PR comments.
 ## Repo map
 | Path | What it is |
 |---|---|
-| `backend/api/routes.py` | REST endpoints: manual analyze trigger, job status/result, PR picker, cache stats. |
-| `backend/core/parser.py` | C source -> AST (tree-sitter-based), per-function extraction. |
-| `backend/core/heuristics.py` | The six weighted risk heuristics (memory imbalance, cyclomatic complexity, call-graph shift, orphaned functions, signature changes, etc). |
-| `backend/core/triage.py` | Combines heuristics into a 0-100 risk score per function and per PR; selects the top-N functions for the LLM. |
-| `backend/llm/client.py` | Gemini/Claude client: builds the bounded prompt, one LLM call per PR, retry/backoff, per-function result caching. |
-| `backend/llm/prompts.py` | Prompt templates for the fast-path review and the Mermaid diagram generation. |
-| `backend/github_utils/client.py` | PyGithub wrapper: PR info/files, PR listing, comment posting. Always authorize with the caller's own OAuth token for anything acting "as the user" (see Invariants). |
-| `backend/github_utils/webhook.py` | GitHub webhook handler; enqueues the same pipeline the manual `/api/analyze` trigger uses. |
-| `backend/workers/pipeline.py` | The end-to-end job pipeline: fetch PR -> parse -> triage -> LLM -> cache -> post comment. |
-| `backend/cache/redis.py` | Job/result storage and cache-stats bookkeeping. |
+| `backend/` | FastAPI service root; see `backend/AGENTS.md`. |
+| `backend/api/` | REST endpoints: manual analyze trigger, job status/result, PR picker, cache stats. See `backend/api/AGENTS.md`. |
+| `backend/core/` | AST parsing, risk heuristics, and triage — the structural-analysis engine. See `backend/core/AGENTS.md`. |
+| `backend/llm/` | Gemini/Claude client, prompts, and schemas for the generated review. See `backend/llm/AGENTS.md`. |
+| `backend/github_utils/` | PyGithub wrapper, diff parsing, webhook handling. See `backend/github_utils/AGENTS.md`. |
+| `backend/workers/` | The end-to-end job pipeline: fetch PR -> parse -> triage -> LLM -> cache -> post comment. See `backend/workers/AGENTS.md`. |
+| `backend/cache/` | Redis-backed job/result storage and cache stats. See `backend/cache/AGENTS.md`. |
 | `backend/main.py` | FastAPI app wiring; router mount point (`/api`). |
-| `frontend/lib/api.ts` | Typed API client; attaches the signed-in user's GitHub access token as `Authorization: Bearer` on every request. |
-| `frontend/app/` | Next.js dashboard, search, and job/result pages. |
+| `frontend/` | Next.js dashboard; see `frontend/AGENTS.md` (and `frontend/app/`, `frontend/components/`, `frontend/lib/` for their own `AGENTS.md`). |
 | `docs/ai-dev/` | AI-assisted development notes for this repo. |
+
+Most directories above have their own `AGENTS.md`; read it when you work there.
 
 ## Commands
 - Backend: `cd backend && uvicorn main:app --reload` (see `backend/SETUP.md`); tests live under `backend/tests`.
