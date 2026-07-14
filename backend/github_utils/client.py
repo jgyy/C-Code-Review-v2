@@ -200,11 +200,15 @@ class GitHubClient:
         self,
         owner: str,
         repo: str,
-        installation_id: Optional[int] = None,
+        user_token: str,
         limit: int = 30,
     ) -> Optional[list[dict]]:
         """
-        List open pull requests for a repo, newest first.
+        List open pull requests for a repo, newest first, as the calling user.
+
+        Authenticated with the caller's own GitHub OAuth token rather than an
+        installation_id, so results are naturally scoped to repos that user
+        can actually see (GitHub itself enforces the access check).
 
         Returns a list of lightweight dicts (not full PR objects) so the
         dashboard's PR picker can render number/title/author/avatar without
@@ -213,7 +217,7 @@ class GitHubClient:
         tell "no open PRs" apart from "couldn't reach that repo".
         """
         def _sync():
-            gh = self._get_github(installation_id)
+            gh = Github(auth=Auth.Token(user_token))
             try:
                 repo_obj = gh.get_repo(f"{owner}/{repo}")
                 pulls = repo_obj.get_pulls(
