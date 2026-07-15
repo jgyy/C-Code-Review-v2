@@ -158,6 +158,14 @@ git clone https://github.com/ainichew/C-Code-Review-v2.git
 cd C-Code-Review-v2
 ```
 
+### Quick start
+
+`./dev.sh` installs deps, creates `.env`/`.env.local` from the examples on
+first run, and starts both dev servers in a `tmux` session
+(`backend`/`frontend` windows). `./dev.sh stop` tears it down. You'll still
+need to fill in the secrets under [Prerequisites](#prerequisites). Manual
+steps below if you prefer.
+
 ### Backend
 
 ```bash
